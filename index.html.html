@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MEDLOG Support Desk — Tickets</title>
+<style>
+  :root{
+    --bg:#EEF1F4; --surface:#FFF; --surface-2:#F6F8FA; --ink:#0F1B2D; --ink-soft:#54657A; --ink-faint:#8A99AC;
+    --border:#DCE2E8; --brand:#0B3D62; --brand-2:#0E7C86; --brand-soft:#E7EEF3; --gold:#B8893F;
+    --pending:#B45309; --pending-bg:#FDF1E1; --progress:#1D4ED8; --progress-bg:#E6EDFC;
+    --testing:#6D28D9; --testing-bg:#EFE7FB; --closed:#15803D; --closed-bg:#E5F4EA;
+    --reopened:#BE185D; --reopened-bg:#FCE4ED; --critical:#B91C1C;
+    --radius:10px; --mono:ui-monospace,Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;} html,body{margin:0;padding:0;}
+  body{background:var(--bg); color:var(--ink); font-family:var(--sans); -webkit-font-smoothing:antialiased;}
+  button,input,select,textarea{font-family:inherit;}
+  :focus-visible{outline:2px solid var(--brand-2); outline-offset:2px;}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;}}
+
+  #app{min-height:100vh; display:flex; flex-direction:column;}
+  header.topbar{background:var(--brand); color:#fff; padding:12px 24px; display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; border-bottom:3px solid var(--gold);}
+  .brand{display:flex; align-items:center; gap:10px;}
+  .brand .mark{width:34px; height:34px; border-radius:7px; background:var(--brand-2); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px;}
+  .brand .name{font-weight:700; font-size:16px;}
+  .brand .sub{font-size:11px; color:#C9D8E3; letter-spacing:1.1px; text-transform:uppercase; margin-top:1px;}
+  .topnav{display:flex; gap:6px; background:rgba(255,255,255,0.08); padding:4px; border-radius:8px;}
+  .topnav button{border:none; background:transparent; color:#D9E4EC; padding:8px 15px; border-radius:6px; font-size:13px; font-weight:600; cursor:pointer;}
+  .topnav button.active{background:#fff; color:var(--brand);}
+  .session-info{font-size:12px; color:#C9D8E3; display:flex; align-items:center; gap:10px;}
+  .session-info .role-chip{background:rgba(255,255,255,0.16); padding:2px 8px; border-radius:20px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.4px;}
+  .session-info button.link{background:none; border:none; color:#fff; text-decoration:underline; cursor:pointer; font-size:12px; padding:0;}
+
+  main{flex:1; padding:24px; max-width:1180px; margin:0 auto; width:100%;}
+  .card{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:20px;}
+  h1.page-title{font-size:20px; margin:0 0 4px; color:var(--brand);}
+  p.page-sub{font-size:13px; color:var(--ink-soft); margin:0 0 22px;}
+  .section-label{font-size:12px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.6px; margin:0 0 10px;}
+
+  .stat-row{display:grid; grid-template-columns:repeat(6,1fr); gap:12px; margin-bottom:18px;}
+  @media (max-width:980px){.stat-row{grid-template-columns:repeat(3,1fr);}}
+  @media (max-width:560px){.stat-row{grid-template-columns:repeat(2,1fr);}}
+  .stat{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:13px 15px;}
+  .stat .n{font-family:var(--mono); font-size:22px; font-weight:700; color:var(--brand);}
+  .stat .l{font-size:11px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.5px; margin-top:2px;}
+  .stat.alert .n{color:var(--critical);}
+  .stat.accent .n{color:var(--brand-2);}
+
+  .two-col{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:18px;}
+  @media (max-width:820px){.two-col{grid-template-columns:1fr;}}
+
+  label{display:block; font-size:12.5px; font-weight:600; color:var(--ink-soft); margin-bottom:5px;}
+  input[type=text],input[type=password],input[type=date],select,textarea{width:100%; padding:10px 11px; border:1px solid var(--border); border-radius:7px; font-size:13.5px; color:var(--ink); background:#fff;}
+  textarea{resize:vertical; min-height:84px;}
+  .field{margin-bottom:16px;} .field-row{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+  @media (max-width:640px){.field-row{grid-template-columns:1fr;}}
+
+  .btn{display:inline-flex; align-items:center; gap:6px; background:var(--brand); color:#fff; border:none; padding:10px 18px; border-radius:7px; font-size:13.5px; font-weight:600; cursor:pointer;}
+  .btn:hover{background:#0a3251;}
+  .btn.secondary{background:#fff; color:var(--brand); border:1px solid var(--border);}
+  .btn.secondary:hover{background:var(--surface-2);}
+  .btn.danger{background:#fff; color:var(--critical); border:1px solid #F3C9C9;}
+  .btn.danger:hover{background:#FDEEEE;}
+  .btn.tiny{padding:6px 11px; font-size:12px;}
+  .btn:disabled{opacity:.5; cursor:not-allowed;}
+  .btn-row{display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
+
+  .subnav{display:flex; gap:18px; margin-bottom:18px; border-bottom:1px solid var(--border);}
+  .subnav button{background:none; border:none; padding:10px 2px; font-size:13.5px; font-weight:600; color:var(--ink-soft); cursor:pointer; border-bottom:2px solid transparent; position:relative; top:1px;}
+  .subnav button.active{color:var(--brand); border-bottom-color:var(--brand-2);}
+
+  .badge{display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:700; padding:4px 9px; border-radius:20px; white-space:nowrap;}
+  .badge.pending{background:var(--pending-bg); color:var(--pending);}
+  .badge.progress{background:var(--progress-bg); color:var(--progress);}
+  .badge.testing{background:var(--testing-bg); color:var(--testing);}
+  .badge.closed{background:var(--closed-bg); color:var(--closed);}
+  .badge.reopened{background:var(--reopened-bg); color:var(--reopened);}
+  .badge.priority-Critical{background:#FBE1E1; color:var(--critical);}
+  .badge.priority-High{background:#FCEBD8; color:#9A4D0B;}
+  .badge.priority-Medium{background:#EFF1F4; color:var(--ink-soft);}
+  .badge.priority-Low{background:#EFF1F4; color:var(--ink-faint);}
+  .badge.overdue{background:#FBE1E1; color:var(--critical);}
+  .badge.svc{background:var(--brand-soft); color:var(--brand);}
+
+  .ticket-id{font-family:var(--mono); font-size:12px; color:var(--ink-soft);}
+  .filters{display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px; align-items:flex-end;}
+  .filters .field{margin-bottom:0; min-width:150px;} .filters .search{flex:1; min-width:200px;}
+  .ticket-list{display:flex; flex-direction:column; gap:10px;}
+  .ticket-row{background:var(--surface); border:1px solid var(--border); border-radius:9px; padding:14px 16px; cursor:pointer; display:flex; align-items:center; gap:14px; border-left:4px solid var(--ink-faint);}
+  .ticket-row:hover{border-color:var(--brand-2);}
+  .ticket-row.status-Pending{border-left-color:var(--pending);}
+  .ticket-row.status-In-Progress{border-left-color:var(--progress);}
+  .ticket-row.status-Testing{border-left-color:var(--testing);}
+  .ticket-row.status-Closed{border-left-color:var(--closed);}
+  .ticket-row.status-Reopened{border-left-color:var(--reopened);}
+  .ticket-row .col-main{flex:1; min-width:0;}
+  .ticket-row .subject{font-weight:600; font-size:14px; margin-bottom:3px;}
+  .ticket-row .meta{font-size:12px; color:var(--ink-soft); display:flex; gap:10px; flex-wrap:wrap;}
+  .ticket-row .col-status{display:flex; flex-direction:column; align-items:flex-end; gap:6px;}
+  .empty-state{text-align:center; padding:46px 20px; color:var(--ink-soft); font-size:13.5px; border:1px dashed var(--border); border-radius:var(--radius); background:var(--surface-2);}
+
+  .bars{display:flex; flex-direction:column; gap:9px;}
+  .bar-row{display:flex; align-items:center; gap:10px;}
+  .bar-row .b-label{font-size:12.5px; color:var(--ink-soft); width:230px; flex-shrink:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .bar-row .b-track{flex:1; height:8px; background:var(--surface-2); border-radius:6px; overflow:hidden;}
+  .bar-row .b-fill{height:100%; background:var(--brand-2); border-radius:6px;}
+  .bar-row .b-count{font-family:var(--mono); font-size:12px; width:26px; text-align:right;}
+
+  .trend{display:flex; align-items:flex-end; gap:8px; height:120px; padding-top:8px;}
+  .trend .t-col{flex:1; display:flex; flex-direction:column; align-items:center; gap:6px; justify-content:flex-end;}
+  .trend .t-bar{width:60%; background:var(--brand); border-radius:4px 4px 0 0; min-height:2px;}
+  .trend .t-lbl{font-size:10.5px; color:var(--ink-faint);}
+  .trend .t-val{font-size:11px; font-family:var(--mono); color:var(--ink-soft);}
+
+  .detail-header{display:flex; justify-content:space-between; align-items:flex-start; gap:14px; margin-bottom:14px; flex-wrap:wrap;}
+  .detail-header h2{font-size:17px; margin:2px 0 6px;}
+  .back-link{background:none; border:none; color:var(--brand-2); font-size:13px; font-weight:600; cursor:pointer; padding:0; margin-bottom:14px;}
+  .stepper{display:flex; align-items:center; margin:16px 0 22px;}
+  .step{display:flex; flex-direction:column; align-items:center; flex:1; position:relative;}
+  .step .dot{width:15px; height:15px; border-radius:50%; background:var(--border); border:2px solid var(--border); z-index:2;}
+  .step .lbl{font-size:11px; color:var(--ink-faint); margin-top:7px; font-weight:600; text-transform:uppercase;}
+  .step .line{position:absolute; top:6px; left:50%; right:-50%; height:2px; background:var(--border); z-index:1;}
+  .step:last-child .line{display:none;}
+  .step.done .dot,.step.done .line{background:var(--brand-2); border-color:var(--brand-2);}
+  .step.done .lbl{color:var(--brand-2);}
+  .step.current .dot{background:var(--brand); border-color:var(--brand); box-shadow:0 0 0 4px var(--brand-soft);}
+  .step.current .lbl{color:var(--brand);}
+  .desc-box{background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:14px 16px; font-size:13.5px; line-height:1.55; margin-bottom:22px; white-space:pre-wrap;}
+  .thread{display:flex; flex-direction:column; gap:12px; margin-bottom:22px;}
+  .thread-item{border:1px solid var(--border); border-radius:8px; padding:12px 14px; background:#fff;}
+  .thread-item.staff{background:var(--brand-soft); border-color:#CFE0EA;}
+  .thread-item .t-head{display:flex; justify-content:space-between; font-size:12px; color:var(--ink-soft); margin-bottom:6px; gap:8px; flex-wrap:wrap;}
+  .thread-item .t-head .who{font-weight:700; color:var(--ink);}
+  .thread-item .t-body{font-size:13.5px; line-height:1.5; white-space:pre-wrap;}
+  .resolve-box{border:1px solid var(--border); border-radius:9px; padding:16px; background:var(--surface-2);}
+  .reopen-banner{background:var(--reopened-bg); color:var(--reopened); border:1px solid #F3C2D8; border-radius:8px; padding:10px 14px; font-size:12.5px; font-weight:600; margin-bottom:16px;}
+
+  table.audit{width:100%; border-collapse:collapse; font-size:12.5px;}
+  table.audit th,table.audit td{text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top;}
+  table.audit th{font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--ink-soft);}
+
+  .gate{max-width:420px; margin:54px auto; text-align:center;}
+  .gate h1{font-size:19px; color:var(--brand); margin-bottom:6px;}
+  .gate p{font-size:13px; color:var(--ink-soft); margin-bottom:22px;}
+  .gate .card{text-align:left;}
+  .error-msg{background:#FBE1E1; color:var(--critical); border-radius:7px; padding:9px 12px; font-size:12.5px; margin-top:10px;}
+  .ok-msg{background:var(--closed-bg); color:var(--closed); border-radius:7px; padding:9px 12px; font-size:12.5px; margin-top:10px;}
+  .hint{font-size:11.5px; color:var(--ink-faint); margin-top:8px;}
+  footer.app-footer{text-align:center; font-size:11.5px; color:var(--ink-faint); padding:18px; border-top:1px solid var(--border);}
+  .tz-note{font-size:11px; color:var(--ink-faint); margin-top:6px;}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+/* =========================================================================
+   MEDLOG Support Desk — client (hébergeable sur GitHub Pages)
+   Backend : Google Apps Script (voir medlog-backend.gs). RBAC côté serveur.
+   ========================================================================= */
+
+// ⚠ À REMPLIR : URL du Web App Apps Script déployé (se termine par /exec)
+const API_URL = "https://script.google.com/macros/s/AKfycbzVl-Qpjfbt8dyBe82BMTPrAxjf-hqwcjrNZpBNTCRUfliHXny1xVQg-SoXwaXu-UaF/exec";
+
+const SERVICES = [
+  "MEDLOGIX",
+  "Access Rights and Passwords",
+  "Business Telephony",
+  "Internet (Wi-Fi, Network, Performance, etc.)",
+  "IT Equipment & Devices Procurement",
+  "MSC Global Citrix Platform and Global Applications (TMS, SAP, Cognos, etc.)",
+  "Office 365 (Outlook, Excel, Teams, SharePoint, etc.)",
+  "Printing and Scanning",
+  "Workstation (PC, Monitor, Accessories, Software, etc.)"
+];
+// Module → écrans (uniquement quand SERVICE = MEDLOGIX). Corrigez librement.
+const MODULE_TREE = {
+  "Freight Management": ["Quotation","Job","Trip Tracking","Payment Request","Supplier Invoice","Customer Invoice / Credit Note","General Service Charge","Charge Item","Charge Template","Event","Freight Job Query","Freight Quotation Query","Customer Invoice Query","Query – Sale & Cost Sheet"],
+  "Arrivela": ["À préciser — écrans Arrivela"],
+  "System Configuration": ["Job Planning","Vehicle Servicing Costs","Resource Unavailability","Trip Report","Vehicle Servicing Costs Report","Trip Tracking Report","Contact","Debtors Credit Limit","Supplier"],
+  "Comptability": ["Dashboard"],
+  "Dashboard": ["Quotations Dashboard","Job Dashboard","Event Dashboard","Vehicle Dashboard","User Management","Revenue by Clients Report","HAD Report"],
+  "Other": ["Not listed above"]
+};
+const PRIORITIES = ["Critical","High","Medium","Low"];
+const STATUSES = ["Pending","In Progress","Testing","Closed","Reopened"];
+const SLA_DAYS = 2;
+const ROLE_LABEL = { admin:"Admin", super:"Super User", user:"Utilisateur" };
+
+const TOKEN_KEY = "medlog_token", SESS_KEY = "medlog_session", EMAIL_KEY = "medlog_email";
+
+// ------------------------ API layer ------------------------
+async function apiGet(params){
+  const qs = Object.keys(params||{}).map(k=>k+"="+encodeURIComponent(params[k])).join("&");
+  const res = await fetch(API_URL + (qs?("?"+qs):""), { method:"GET" });
+  if(!res.ok) throw new Error("HTTP " + res.status);
+  const data = await res.json();
+  if(data && data.error) throw new Error(data.error);
+  return data;
+}
+async function apiPost(body){
+  // text/plain => requête "simple", pas de pré-vol CORS (indispensable depuis GitHub Pages).
+  const res = await fetch(API_URL, { method:"POST", body: JSON.stringify(body) });
+  const data = await res.json();
+  if(data && data.error) throw new Error(data.error);
+  return data;
+}
+
+// ------------------------ State ------------------------
+let tickets = [];
+let state = {
+  booting: true,
+  loadError: "",
+  view: "dashboard",            // dashboard | tickets | users | audit
+  session: null,                // { token, email, name, role }
+  loginError: "", loginEmailPrefill: localStorage.getItem(EMAIL_KEY) || "",
+  mustChangePassword: false, pwChangeError:"", pwChangeOk:false,
+  userSubview: "new",           // new | mine
+  selectedTicketId: null, reopening:false,
+  newService: SERVICES[0],
+  filter: { status:"all", service:"all", priority:"all", search:"" },
+  dashPeriod: "this_month", customFrom:"", customTo:"",
+  adminUsers: [], adminUsersError:"",
+  auditLog: [], auditError:"",
+  deepLinkTicket: null
+};
+
+// ------------------------ Utilities ------------------------
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function fmtDate(ts){ // affiche TOUJOURS dans le fuseau local du navigateur (timestamps stockés en epoch UTC)
+  const d = new Date(Number(ts));
+  return d.toLocaleDateString("fr-FR",{day:"2-digit",month:"short",year:"numeric"}) + " · " + d.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"});
+}
+function localTZ(){ try{ return Intl.DateTimeFormat().resolvedOptions().timeZone; }catch(e){ return "local"; } }
+function daysSince(ts){ return Math.floor((Date.now()-Number(ts))/86400000); }
+function isOverdue(t){ return t.status!=="Closed" && daysSince(t.createdAt) >= SLA_DAYS; }
+function statusClass(s){ return {"Pending":"pending","In Progress":"progress","Testing":"testing","Closed":"closed","Reopened":"reopened"}[s]||"pending"; }
+function statusRowClass(s){ return "status-"+String(s).replace(/\s+/g,"-"); }
+function priorityRank(p){ return {"Critical":0,"High":1,"Medium":2,"Low":3}[p] ?? 4; }
+function statusRank(s){ return {"Reopened":0,"Pending":1,"In Progress":2,"Testing":3,"Closed":4}[s] ?? 5; }
+function getTicket(id){ return tickets.find(t=>t.id===id); }
+function isStaff(){ return state.session && (state.session.role==="admin"||state.session.role==="super"); }
+function canChangePriority(){ return isStaff(); }
+
+function periodRange(){
+  const now = new Date(); const start = new Date(now); start.setHours(0,0,0,0);
+  const out = { from:0, to:Date.now()+1 };
+  const startOfDay = d=>{ const x=new Date(d); x.setHours(0,0,0,0); return x.getTime(); };
+  const endOfDay = d=>{ const x=new Date(d); x.setHours(23,59,59,999); return x.getTime(); };
+  switch(state.dashPeriod){
+    case "today": out.from=startOfDay(now); out.to=endOfDay(now); break;
+    case "yesterday": { const y=new Date(now); y.setDate(y.getDate()-1); out.from=startOfDay(y); out.to=endOfDay(y); break; }
+    case "last7": { const s=new Date(now); s.setDate(s.getDate()-6); out.from=startOfDay(s); out.to=endOfDay(now); break; }
+    case "this_month": out.from=new Date(now.getFullYear(),now.getMonth(),1).getTime(); out.to=endOfDay(now); break;
+    case "prev_month": out.from=new Date(now.getFullYear(),now.getMonth()-1,1).getTime(); out.to=new Date(now.getFullYear(),now.getMonth(),0,23,59,59,999).getTime(); break;
+    case "this_year": out.from=new Date(now.getFullYear(),0,1).getTime(); out.to=endOfDay(now); break;
+    case "custom": out.from = state.customFrom?startOfDay(new Date(state.customFrom)):0; out.to = state.customTo?endOfDay(new Date(state.customTo)):Date.now()+1; break;
+    default: break;
+  }
+  return out;
+}
+function inPeriod(t){ const r=periodRange(); return Number(t.createdAt)>=r.from && Number(t.createdAt)<=r.to; }
+
+function render(){ document.getElementById("app").innerHTML = renderApp(); bindEvents(); }
+
+// ------------------------ Boot ------------------------
+async function boot(){
+  // restaure une session éventuelle
+  try{
+    const sess = JSON.parse(localStorage.getItem(SESS_KEY)||"null");
+    const token = localStorage.getItem(TOKEN_KEY);
+    if(sess && token){ state.session = Object.assign({}, sess, { token }); }
+  }catch(e){}
+  // deep link e-mail (#ticket=ERP-...)
+  const m = (location.hash||"").match(/ticket=([^&]+)/);
+  if(m) state.deepLinkTicket = decodeURIComponent(m[1]);
+
+  render();
+  if(state.session){
+    try{ await refreshTickets(); }
+    catch(e){ // token périmé → on déconnecte proprement
+      state.session = null; localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(SESS_KEY);
+    }
+  }
+  state.booting = false;
+  if(state.deepLinkTicket && state.session){ state.view="tickets"; state.selectedTicketId = state.deepLinkTicket; }
+  render();
+}
+async function refreshTickets(){ tickets = await apiGet({ type:"tickets", token: state.session.token }); }
+
+// =========================== RENDER ROOT ===========================
+function renderApp(){
+  return `${renderHeader()}<main>${renderMain()}</main><footer class="app-footer">MEDLOG — Support Desk</footer>`;
+}
+
+function renderHeader(){
+  let nav = "", session = "";
+  if(state.session){
+    const role = state.session.role;
+    const tabs = [["dashboard","Tableau de bord"]];
+    if(role==="user") tabs.push(["tickets","Mes tickets"]);
+    else tabs.push(["tickets","Tickets"]);
+    if(role==="admin"){ tabs.push(["users","Utilisateurs"]); tabs.push(["audit","Audit"]); }
+    nav = `<div class="topnav">${tabs.map(([v,l])=>`<button data-action="nav" data-view="${v}" class="${state.view===v?'active':''}">${l}</button>`).join("")}</div>`;
+    session = `<div class="session-info"><span class="role-chip">${ROLE_LABEL[role]||role}</span>${esc(state.session.name)}<button class="link" data-action="logout">déconnexion</button></div>`;
+  }
+  return `<header class="topbar">
+    <div class="brand"><div class="mark">ML</div><div><div class="name">MEDLOG Support Desk</div><div class="sub">Tickets</div></div></div>
+    ${nav}${session}
+  </header>`;
+}
+
+function renderMain(){
+  if(state.booting) return renderLoading();
+  if(!state.session) return renderLogin();
+  if(state.mustChangePassword) return renderForcePassword();
+  if(state.loadError) return renderLoadError();
+  if(state.view==="dashboard") return renderDashboard();
+  if(state.view==="tickets") return renderTicketsArea();
+  if(state.view==="users") return state.session.role==="admin" ? renderUsers() : renderDashboard();
+  if(state.view==="audit") return state.session.role==="admin" ? renderAudit() : renderDashboard();
+  return "";
+}
+
+function renderLoading(){
+  return `<div class="gate"><h1>Connexion en cours…</h1><p>Merci de patienter un moment.</p></div>`;
+}
+function renderLoadError(){
+  return `<div class="gate"><h1>Connexion impossible</h1><p>Le backend n'a pas pu être joint.</p>
+    <div class="card"><div class="error-msg" style="margin-bottom:12px;">${esc(state.loadError)}</div>
+    <div class="hint" style="margin-bottom:12px;">Vérifiez que API_URL est bien renseignée et que le déploiement Apps Script est en accès « Tout le monde ».</div>
+    <button class="btn" data-action="retry">Réessayer</button></div></div>`;
+}
+
+// =========================== LOGIN ===========================
+function renderLogin(){
+  return `<div class="gate">
+    <h1>MEDLOG Support Desk</h1>
+    <p>Connectez-vous avec l'adresse e-mail et le mot de passe fournis par l'administrateur.</p>
+    <div class="card">
+      <div class="field"><label for="login-email">Adresse e-mail</label>
+        <input type="text" id="login-email" placeholder="prenom.nom@medlog.com" value="${esc(state.loginEmailPrefill)}"></div>
+      <div class="field"><label for="login-password">Mot de passe</label>
+        <input type="password" id="login-password" placeholder="••••••••"></div>
+      ${state.loginError?`<div class="error-msg">${esc(state.loginError)}</div>`:""}
+      <button class="btn" data-action="login" style="margin-top:6px;">Se connecter</button>
+      <div class="hint">Les comptes sont créés uniquement par l'administrateur (aucune auto-inscription).</div>
+    </div>
+  </div>`;
+}
+
+function renderForcePassword(){
+  return `<div class="gate">
+    <h1>Changement de mot de passe requis</h1>
+    <p>Pour des raisons de sécurité, définissez un nouveau mot de passe avant de continuer.</p>
+    <div class="card">
+      <div class="field"><label for="np1">Nouveau mot de passe</label><input type="password" id="np1" placeholder="6 caractères minimum"></div>
+      <div class="field"><label for="np2">Confirmer</label><input type="password" id="np2"></div>
+      ${state.pwChangeError?`<div class="error-msg">${esc(state.pwChangeError)}</div>`:""}
+      <button class="btn" data-action="do-change-password">Enregistrer</button>
+    </div>
+  </div>`;
+}
+
+// =========================== DASHBOARD ===========================
+function scopedTickets(){ return tickets.filter(inPeriod); }
+
+function renderDashboard(){
+  const data = scopedTickets();
+  const count = s => data.filter(t=>t.status===s).length;
+  const total = data.length;
+  const open = data.filter(t=>t.status!=="Closed").length;
+
+  const periods = [["today","Aujourd'hui"],["yesterday","Hier"],["last7","7 derniers jours"],["this_month","Ce mois"],["prev_month","Mois précédent"],["this_year","Cette année"],["custom","Période personnalisée"]];
+  const periodSelect = `<select id="dash-period">${periods.map(([v,l])=>`<option value="${v}" ${state.dashPeriod===v?'selected':''}>${l}</option>`).join("")}</select>`;
+  const customRange = state.dashPeriod==="custom" ? `
+    <div class="field" style="margin-bottom:0;"><label>Du</label><input type="date" id="cf" value="${esc(state.customFrom)}"></div>
+    <div class="field" style="margin-bottom:0;"><label>Au</label><input type="date" id="ct" value="${esc(state.customTo)}"></div>` : "";
+
+  // KPI (§19)
+  const avgRes = avgResolution(data);
+  const kpis = `<div class="stat-row">
+    <div class="stat"><div class="n">${total}</div><div class="l">Total tickets</div></div>
+    <div class="stat accent"><div class="n">${count("Pending")}</div><div class="l">Nouveaux (Pending)</div></div>
+    <div class="stat accent"><div class="n">${count("In Progress")}</div><div class="l">In Progress</div></div>
+    <div class="stat accent"><div class="n">${count("Testing")}</div><div class="l">Testing</div></div>
+    <div class="stat"><div class="n">${count("Closed")}</div><div class="l">Closed</div></div>
+    <div class="stat ${data.filter(isOverdue).length?'alert':''}"><div class="n">${avgRes==null?'—':avgRes.toFixed(1)+'j'}</div><div class="l">Tps moyen résolution</div></div>
+  </div>`;
+
+  const byService = groupCount(data, t=>t.service);
+  const byPriority = groupCount(data, t=>t.priority);
+  const byCreator = groupCount(data, t=>t.requesterName||t.requesterEmail);
+
+  const charts = `<div class="two-col">
+    <div class="card"><div class="section-label">Tickets par service</div>${barList(byService)}</div>
+    <div class="card"><div class="section-label">Tickets par priorité</div>${barList(byPriority)}</div>
+  </div>
+  <div class="two-col">
+    <div class="card"><div class="section-label">Tickets par créateur</div>${barList(byCreator)}</div>
+    <div class="card"><div class="section-label">Tendance mensuelle (12 mois)</div>${monthlyTrend(data)}</div>
+  </div>`;
+
+  // En cours / Testing mis en avant (§2)
+  const active = data.filter(t=>t.status==="In Progress"||t.status==="Testing"||t.status==="Reopened")
+    .sort((a,b)=>statusRank(a.status)-statusRank(b.status)||priorityRank(a.priority)-priorityRank(b.priority));
+  const activeBlock = `<div class="card" style="margin-bottom:18px;"><div class="section-label">À traiter en priorité — In Progress / Testing / Reopened</div>
+    ${active.length?`<div class="ticket-list">${active.slice(0,8).map(rowHtml).join("")}</div>`:`<div class="empty-state">Rien en cours sur cette période.</div>`}</div>`;
+
+  // Tickets récents + dernières activités (§2)
+  const recent = data.slice().sort((a,b)=>Number(b.createdAt)-Number(a.createdAt)).slice(0,6);
+  const recentBlock = `<div class="card"><div class="section-label">Tickets récents</div>
+    ${recent.length?`<div class="ticket-list">${recent.map(rowHtml).join("")}</div>`:`<div class="empty-state">Aucun ticket sur cette période.</div>`}</div>`;
+  const activities = latestActivities(data, 8);
+  const activityBlock = `<div class="card"><div class="section-label">Dernières activités</div>
+    ${activities.length?`<div class="thread">${activities.map(a=>`<div class="thread-item ${a.role!=='user'?'staff':''}"><div class="t-head"><span class="who">${esc(a.by)}</span><span>${fmtDate(a.date)}</span></div><div class="t-body">${esc(a.text)} <span class="ticket-id">(${a.id})</span></div></div>`).join("")}</div>`:`<div class="empty-state">Aucune activité.</div>`}</div>`;
+
+  return `<h1 class="page-title">Tableau de bord</h1>
+    <p class="page-sub">Vue d'ensemble du Support Desk IT.</p>
+    <div class="filters"><div class="field" style="margin-bottom:0;"><label>Période</label>${periodSelect}</div>${customRange}</div>
+    ${kpis}
+    ${activeBlock}
+    ${charts}
+    <div class="two-col">${recentBlock}${activityBlock}</div>
+    <div class="tz-note">Heures affichées dans votre fuseau : ${esc(localTZ())}.</div>`;
+}
+
+function avgResolution(data){
+  const ds = data.filter(t=>t.status==="Closed").map(t=>{
+    const e = [...(t.history||[])].reverse().find(h=>h.to==="Closed");
+    return ((e?e.date:Date.now()) - Number(t.createdAt))/86400000;
+  });
+  return ds.length ? ds.reduce((a,b)=>a+b,0)/ds.length : null;
+}
+function groupCount(data, keyFn){
+  const m = {}; data.forEach(t=>{ const k=keyFn(t)||"—"; m[k]=(m[k]||0)+1; });
+  return Object.keys(m).map(k=>({label:k,count:m[k]})).sort((a,b)=>b.count-a.count);
+}
+function barList(items){
+  if(!items.length) return `<div class="empty-state">Aucune donnée.</div>`;
+  const max = Math.max(1,...items.map(i=>i.count));
+  return `<div class="bars">${items.map(i=>`<div class="bar-row"><div class="b-label" title="${esc(i.label)}">${esc(i.label)}</div><div class="b-track"><div class="b-fill" style="width:${Math.round(i.count/max*100)}%"></div></div><div class="b-count">${i.count}</div></div>`).join("")}</div>`;
+}
+function monthlyTrend(data){
+  const now = new Date(); const buckets = [];
+  for(let i=11;i>=0;i--){ const d=new Date(now.getFullYear(),now.getMonth()-i,1); buckets.push({y:d.getFullYear(),m:d.getMonth(),label:d.toLocaleDateString("fr-FR",{month:"short"}),count:0}); }
+  data.forEach(t=>{ const d=new Date(Number(t.createdAt)); const b=buckets.find(b=>b.y===d.getFullYear()&&b.m===d.getMonth()); if(b)b.count++; });
+  const max = Math.max(1,...buckets.map(b=>b.count));
+  return `<div class="trend">${buckets.map(b=>`<div class="t-col"><div class="t-val">${b.count}</div><div class="t-bar" style="height:${Math.round(b.count/max*92)}%"></div><div class="t-lbl">${esc(b.label)}</div></div>`).join("")}</div>`;
+}
+function latestActivities(data, n){
+  const acts = [];
+  data.forEach(t=>(t.history||[]).forEach(h=>{
+    let text = "";
+    if(h.type==="create") text="a créé le ticket";
+    else if(h.type==="comment") text="a commenté : "+(h.comment||"");
+    else if(h.type==="status") text="a changé le statut "+h.from+" → "+h.to;
+    else if(h.type==="priority") text="a changé la priorité "+h.from+" → "+h.to;
+    else if(h.type==="reopen") text="a rouvert le ticket";
+    else if(h.type==="assign") text="a affecté le ticket à "+(h.to||"—");
+    else text=h.comment||"";
+    acts.push({ id:t.id, by:h.by||"—", role:h.role||"user", date:h.date, text });
+  }));
+  return acts.sort((a,b)=>Number(b.date)-Number(a.date)).slice(0,n);
+}
+
+// =========================== TICKETS AREA ===========================
+function renderTicketsArea(){
+  if(state.selectedTicketId){
+    const t = getTicket(state.selectedTicketId);
+    if(t) return (isStaff()?`<button class="back-link" data-action="back">&larr; Retour</button>`:`<button class="back-link" data-action="back">&larr; Retour</button>`) + renderTicketDetail(t);
+    state.selectedTicketId = null;
+  }
+  if(state.session.role==="user") return renderUserTickets();
+  return renderStaffTickets();
+}
+
+function renderUserTickets(){
+  const sub = `<div class="subnav">
+    <button data-action="user-subview" data-view="new" class="${state.userSubview==='new'?'active':''}">Nouveau ticket</button>
+    <button data-action="user-subview" data-view="mine" class="${state.userSubview==='mine'?'active':''}">Mes tickets</button>
+  </div>`;
+  if(state.userSubview==="new") return sub + renderNewTicketForm();
+  const mine = tickets.slice().sort((a,b)=>Number(b.createdAt)-Number(a.createdAt));
+  return sub + (mine.length?`<div class="ticket-list">${mine.map(rowHtml).join("")}</div>`:`<div class="empty-state">Vous n'avez pas encore créé de ticket.</div>`);
+}
+
+function renderNewTicketForm(){
+  const svcOpts = SERVICES.map(s=>`<option value="${esc(s)}" ${state.newService===s?'selected':''}>${esc(s)}</option>`).join("");
+  const prioOpts = PRIORITIES.map(p=>`<option value="${esc(p)}">${esc(p)}</option>`).join("");
+  const isMedlogix = state.newService === "MEDLOGIX";
+  let medlogixFields = "";
+  if(isMedlogix){
+    const mods = Object.keys(MODULE_TREE);
+    const modOpts = mods.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join("");
+    const winOpts = MODULE_TREE[mods[0]].map(w=>`<option value="${esc(w)}">${esc(w)}</option>`).join("");
+    medlogixFields = `<div class="field-row">
+      <div class="field"><label for="t-module">Module concerné</label><select id="t-module" onchange="onModuleChange()">${modOpts}</select></div>
+      <div class="field"><label for="t-window">Écran / Fenêtre</label><select id="t-window">${winOpts}</select></div>
+    </div>`;
+  }
+  return `<h1 class="page-title">Nouveau ticket</h1>
+    <p class="page-sub">Sélectionnez le service concerné, puis décrivez votre demande ou incident IT.</p>
+    <div class="card">
+      <div class="field"><label for="t-service">Service</label>
+        <select id="t-service" onchange="onServiceChange()">${svcOpts}</select></div>
+      ${medlogixFields}
+      <div class="field" style="max-width:260px;"><label for="t-priority">Priorité</label><select id="t-priority">${prioOpts}</select></div>
+      <div class="field"><label for="t-subject">Sujet</label><input type="text" id="t-subject" placeholder="Résumé court"></div>
+      <div class="field"><label for="t-desc">Description détaillée</label><textarea id="t-desc" placeholder="Décrivez précisément le problème ou la demande."></textarea></div>
+      <div id="form-error"></div>
+      <button class="btn" data-action="submit-ticket">Soumettre le ticket</button>
+    </div>`;
+}
+function onServiceChange(){ state.newService = document.getElementById("t-service").value; render(); }
+function onModuleChange(){
+  const m = document.getElementById("t-module").value;
+  document.getElementById("t-window").innerHTML = (MODULE_TREE[m]||[]).map(w=>`<option value="${esc(w)}">${esc(w)}</option>`).join("");
+}
+
+function renderStaffTickets(){
+  const f = state.filter;
+  const statusOpts = ["all",...STATUSES].map(s=>`<option value="${s}" ${f.status===s?'selected':''}>${s==='all'?'Tous statuts':s}</option>`).join("");
+  const svcOpts = ["all",...SERVICES].map(s=>`<option value="${esc(s)}" ${f.service===s?'selected':''}>${s==='all'?'Tous services':esc(s)}</option>`).join("");
+  const prioOpts = ["all",...PRIORITIES].map(p=>`<option value="${esc(p)}" ${f.priority===p?'selected':''}>${p==='all'?'Toutes priorités':esc(p)}</option>`).join("");
+  let list = tickets.slice();
+  if(f.status!=="all") list=list.filter(t=>t.status===f.status);
+  if(f.service!=="all") list=list.filter(t=>t.service===f.service);
+  if(f.priority!=="all") list=list.filter(t=>t.priority===f.priority);
+  if(f.search.trim()){ const q=f.search.trim().toLowerCase(); list=list.filter(t=>t.id.toLowerCase().includes(q)||(t.subject||"").toLowerCase().includes(q)||(t.requesterName||"").toLowerCase().includes(q)||(t.requesterEmail||"").toLowerCase().includes(q)); }
+  list.sort((a,b)=>statusRank(a.status)-statusRank(b.status)||priorityRank(a.priority)-priorityRank(b.priority)||Number(b.createdAt)-Number(a.createdAt));
+  return `<h1 class="page-title">Tickets</h1><p class="page-sub">Traitement des tickets de support IT.</p>
+    <div class="filters">
+      <div class="field"><label>Statut</label><select id="f-status">${statusOpts}</select></div>
+      <div class="field"><label>Service</label><select id="f-service">${svcOpts}</select></div>
+      <div class="field"><label>Priorité</label><select id="f-priority">${prioOpts}</select></div>
+      <div class="field search"><label>Recherche</label><input type="text" id="f-search" placeholder="N°, sujet, demandeur…" value="${esc(f.search)}"></div>
+      <button class="btn secondary" data-action="export-csv">Exporter CSV</button>
+    </div>
+    ${list.length?`<div class="ticket-list">${list.map(rowHtml).join("")}</div>`:`<div class="empty-state">Aucun ticket ne correspond à ces filtres.</div>`}`;
+}
+
+function rowHtml(t){
+  const overdue = isOverdue(t)?`<span class="badge overdue">⚠ En retard</span>`:"";
+  const win = t.service==="MEDLOGIX" && t.module ? ` — ${esc(t.module)}${t.window?(" / "+esc(t.window)):""}` : "";
+  return `<div class="ticket-row ${statusRowClass(t.status)}" data-action="open-ticket" data-id="${t.id}">
+    <div class="col-main"><div class="subject">${esc(t.subject)}</div>
+      <div class="meta"><span class="ticket-id">${t.id}</span><span class="badge svc">${esc(t.service)}</span><span>${esc(t.requesterName||t.requesterEmail)}${win}</span><span>${fmtDate(t.createdAt)}</span></div>
+    </div>
+    <div class="col-status"><span class="badge priority-${t.priority}">${esc(t.priority)}</span><span class="badge ${statusClass(t.status)}">${esc(t.status)}</span>${overdue}</div>
+  </div>`;
+}
+
+// =========================== TICKET DETAIL ===========================
+function renderStepper(status){
+  const steps = ["Pending","In Progress","Testing","Closed"];
+  const disp = status==="Reopened" ? "In Progress" : status;
+  const idx = steps.indexOf(disp);
+  return `<div class="stepper">${steps.map((s,i)=>{const c=i<idx?"done":(i===idx?"current":"");return `<div class="step ${c}"><div class="line"></div><div class="dot"></div><div class="lbl">${s}</div></div>`;}).join("")}</div>`;
+}
+
+function renderTicketDetail(t){
+  const overdue = isOverdue(t);
+  const reopenBanner = t.status==="Reopened" ? `<div class="reopen-banner">🔁 Ticket rouvert — nouveau traitement requis.</div>` : "";
+  const win = t.service==="MEDLOGIX" && t.module ? `<span>${esc(t.module)}${t.window?(" / "+esc(t.window)):""}</span>` : "";
+  const assigned = t.assignedTo ? `<span>Affecté à : ${esc(t.assignedTo)}</span>` : "";
+
+  const history = (t.history||[]).map(h=>{
+    const staff = h.role!=="user";
+    let body = "";
+    if(h.type==="create") body="A créé le ticket.";
+    else if(h.type==="comment") body=esc(h.comment);
+    else if(h.type==="status") body=`${h.comment?esc(h.comment)+"<br>":""}<span style="color:var(--ink-soft);font-size:12px;">Statut : <strong>${esc(h.from)}</strong> → <strong>${esc(h.to)}</strong></span>`;
+    else if(h.type==="priority") body=`<span style="color:var(--ink-soft);font-size:12px;">Priorité : <strong>${esc(h.from)}</strong> → <strong>${esc(h.to)}</strong></span>`;
+    else if(h.type==="reopen") body=`${h.comment?esc(h.comment)+"<br>":""}<span style="color:var(--ink-soft);font-size:12px;">Réouverture (${esc(h.from)} → Reopened)</span>`;
+    else if(h.type==="assign") body=`<span style="color:var(--ink-soft);font-size:12px;">Affectation : ${esc(h.from)} → ${esc(h.to)}</span>`;
+    return `<div class="thread-item ${staff?'staff':''}"><div class="t-head"><span class="who">${esc(h.by)} ${staff?`· ${ROLE_LABEL[h.role]||h.role}`:""}</span><span>${fmtDate(h.date)}</span></div><div class="t-body">${body}</div></div>`;
+  }).join("");
+
+  let actions = "";
+  // Standard user : commenter ses propres tickets
+  if(state.session.role==="user"){
+    actions = `<div class="section-label">Ajouter un commentaire</div>
+      <div class="resolve-box">
+        <div class="field"><label for="user-comment">Commentaire</label><textarea id="user-comment" placeholder="Précision, complément d'information…"></textarea></div>
+        <div id="act-error"></div>
+        <button class="btn" data-action="user-comment" data-id="${t.id}">Envoyer</button>
+      </div>`;
+  } else if(isStaff()){
+    if(state.reopening){
+      actions = `<div class="section-label">Réouverture</div><div class="resolve-box">
+        <div class="hint" style="margin-bottom:10px;">Le statut passera à « Reopened ».</div>
+        <div class="field"><label for="staff-comment">Motif de réouverture</label><textarea id="staff-comment"></textarea></div>
+        <div id="act-error"></div>
+        <div class="btn-row"><button class="btn" data-action="confirm-reopen" data-id="${t.id}">Confirmer</button><button class="btn secondary" data-action="cancel-reopen">Annuler</button></div>
+      </div>`;
+    } else if(t.status==="Closed"){
+      actions = `<div class="section-label">Ticket fermé</div><div class="btn-row"><button class="btn secondary" data-action="reopen" data-id="${t.id}">Rouvrir ce ticket</button></div>`;
+    } else {
+      const opts = nextStatusOptions(t.status).map(s=>`<option value="${s}">${s}</option>`).join("");
+      actions = `<div class="section-label">Réponse / mise à jour</div><div class="resolve-box">
+        <div class="field"><label for="staff-comment">Commentaire</label><textarea id="staff-comment" placeholder="Analyse, action réalisée, motif de clôture…"></textarea></div>
+        <div class="field" style="max-width:260px;"><label for="staff-status">Nouveau statut</label><select id="staff-status">${opts}</select></div>
+        <div id="act-error"></div>
+        <div class="btn-row"><button class="btn" data-action="staff-update" data-id="${t.id}">Enregistrer</button></div>
+      </div>`;
+    }
+  }
+
+  // Bloc priorité / affectation (admin + super)
+  let staffControls = "";
+  if(isStaff()){
+    const prioOpts = PRIORITIES.map(p=>`<option value="${p}" ${t.priority===p?'selected':''}>${p}</option>`).join("");
+    staffControls = `<div class="two-col" style="margin-bottom:20px;">
+      <div class="card"><div class="section-label">Priorité</div>
+        <div class="btn-row"><select id="prio-select" style="max-width:200px;">${prioOpts}</select>
+        <button class="btn tiny" data-action="set-priority" data-id="${t.id}">Mettre à jour</button></div>
+        <div class="hint">Toute modification est journalisée dans l'historique et l'audit.</div></div>
+      <div class="card"><div class="section-label">Affectation</div>
+        <div class="btn-row"><input type="text" id="assign-input" placeholder="e-mail de l'agent" value="${esc(t.assignedTo||'')}" style="max-width:240px;">
+        <button class="btn tiny" data-action="assign" data-id="${t.id}">Affecter</button></div></div>
+    </div>`;
+  }
+
+  return `<div class="detail-header">
+      <div><span class="ticket-id">${t.id}</span><h2>${esc(t.subject)}</h2>
+        <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;">
+          <span class="badge svc">${esc(t.service)}</span>${win}<span>Demandeur : ${esc(t.requesterName||t.requesterEmail)}</span>${assigned}<span>Créé le ${fmtDate(t.createdAt)}</span></div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;"><span class="badge priority-${t.priority}">${esc(t.priority)}</span><span class="badge ${statusClass(t.status)}">${esc(t.status)}</span>${overdue?`<span class="badge overdue">⚠ En retard</span>`:""}</div>
+    </div>
+    ${renderStepper(t.status)}
+    ${reopenBanner}
+    ${staffControls}
+    <div class="section-label">Description</div>
+    <div class="desc-box">${esc(t.description)}</div>
+    <div class="section-label">Historique</div>
+    <div class="thread">${history}</div>
+    ${actions}`;
+}
+function nextStatusOptions(cur){
+  switch(cur){
+    case "Pending": return ["In Progress","Testing","Closed"];
+    case "In Progress": return ["Testing","Closed"];
+    case "Testing": return ["In Progress","Closed"];
+    case "Reopened": return ["In Progress","Testing","Closed"];
+    default: return [];
+  }
+}
+
+// =========================== USERS (admin) ===========================
+function renderUsers(){
+  if(!state.adminUsers.length && !state.adminUsersError){
+    apiGet({type:"users", token:state.session.token}).then(list=>{ state.adminUsers=list; render(); }).catch(e=>{ state.adminUsersError=e.message||String(e); render(); });
+  }
+  const roleOpts = [["user","Utilisateur"],["super","Super User"],["admin","Admin"]].map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
+  const superCount = state.adminUsers.filter(u=>u.role==="super").length;
+  let list;
+  if(state.adminUsersError) list=`<div class="error-msg">${esc(state.adminUsersError)}</div>`;
+  else if(!state.adminUsers.length) list=`<div class="empty-state">Chargement…</div>`;
+  else list=`<div class="ticket-list">${state.adminUsers.map(u=>{
+    const active = String(u.active).toUpperCase()!=="FALSE";
+    return `<div class="ticket-row" style="border-left-color:${active?'var(--brand-2)':'var(--critical)'};cursor:default;">
+      <div class="col-main"><div class="subject">${esc(u.name||"(sans nom)")} <span class="badge svc">${ROLE_LABEL[u.role]||u.role}</span> ${active?"":'<span class="badge priority-Critical">Désactivé</span>'}</div>
+        <div class="meta"><span class="ticket-id">${esc(u.email)}</span></div></div>
+      <div class="col-status" style="align-items:flex-end;gap:6px;">
+        <div class="btn-row">
+          <button class="btn tiny secondary" data-action="reset-pw" data-email="${esc(u.email)}">Réinit. MDP</button>
+          <button class="btn tiny secondary" data-action="toggle-active" data-email="${esc(u.email)}" data-active="${active?'0':'1'}">${active?'Désactiver':'Activer'}</button>
+          <button class="btn tiny danger" data-action="del-user" data-email="${esc(u.email)}">Supprimer</button>
+        </div>
+        <select data-action="change-role" data-email="${esc(u.email)}" style="font-size:12px;padding:5px 8px;">
+          ${[["user","Utilisateur"],["super","Super User"],["admin","Admin"]].map(([v,l])=>`<option value="${v}" ${u.role===v?'selected':''}>${l}</option>`).join("")}
+        </select>
+      </div></div>`;
+  }).join("")}</div>`;
+
+  return `<h1 class="page-title">Utilisateurs</h1>
+    <p class="page-sub">Comptes créés uniquement par l'administrateur. L'identifiant de connexion est l'adresse e-mail. Super Users : ${superCount}/2.</p>
+    <div class="card" style="margin-bottom:20px;">
+      <div class="section-label">Créer un utilisateur</div>
+      <div class="field-row">
+        <div class="field"><label for="nu-name">Nom complet</label><input type="text" id="nu-name" placeholder="K. Mballa"></div>
+        <div class="field"><label for="nu-email">Adresse e-mail (identifiant)</label><input type="text" id="nu-email" placeholder="prenom.nom@medlog.com"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="nu-password">Mot de passe</label><input type="password" id="nu-password" placeholder="6 caractères minimum"></div>
+        <div class="field"><label for="nu-role">Rôle</label><select id="nu-role">${roleOpts}</select></div>
+      </div>
+      <div id="user-form-error"></div>
+      <button class="btn" data-action="create-user">Créer l'utilisateur</button>
+      <div class="hint">Le compte est créé avec « changement de mot de passe obligatoire » à la première connexion.</div>
+    </div>
+    <div class="section-label">Comptes existants</div>${list}`;
+}
+
+// =========================== AUDIT (admin) ===========================
+function renderAudit(){
+  if(!state.auditLog.length && !state.auditError){
+    apiGet({type:"audit", token:state.session.token}).then(rows=>{ state.auditLog=rows; render(); }).catch(e=>{ state.auditError=e.message||String(e); render(); });
+  }
+  let body;
+  if(state.auditError) body=`<div class="error-msg">${esc(state.auditError)}</div>`;
+  else if(!state.auditLog.length) body=`<div class="empty-state">Chargement du journal…</div>`;
+  else body=`<div class="card" style="overflow-x:auto;"><table class="audit"><thead><tr><th>Date</th><th>Utilisateur</th><th>Action</th><th>Cible</th><th>Ancienne valeur</th><th>Nouvelle valeur</th></tr></thead>
+    <tbody>${state.auditLog.map(a=>`<tr><td>${fmtDate(a.timestamp)}</td><td>${esc(a.user)}</td><td>${esc(a.action)}</td><td class="ticket-id">${esc(a.target)}</td><td>${esc(a.oldValue)}</td><td>${esc(a.newValue)}</td></tr>`).join("")}</tbody></table></div>`;
+  return `<h1 class="page-title">Journal d'audit</h1><p class="page-sub">Traçabilité complète des actions (500 dernières).</p>${body}`;
+}
+
+// =========================== EVENTS ===========================
+function bindEvents(){
+  document.querySelectorAll("[data-action]").forEach(el=>{
+    const ev = el.dataset.action==="change-role" ? "change" : "click";
+    el.addEventListener(ev, onAction);
+  });
+  const wire=(id,fn)=>{ const e=document.getElementById(id); if(e) e.addEventListener("change",fn); };
+  wire("f-status",e=>{state.filter.status=e.target.value; render();});
+  wire("f-service",e=>{state.filter.service=e.target.value; render();});
+  wire("f-priority",e=>{state.filter.priority=e.target.value; render();});
+  wire("dash-period",e=>{state.dashPeriod=e.target.value; render();});
+  wire("cf",e=>{state.customFrom=e.target.value; render();});
+  wire("ct",e=>{state.customTo=e.target.value; render();});
+  const fs=document.getElementById("f-search");
+  if(fs){ fs.addEventListener("input",e=>{state.filter.search=e.target.value; render();}); fs.focus(); fs.setSelectionRange(fs.value.length,fs.value.length); }
+}
+
+async function onAction(e){
+  const el = e.currentTarget; const action = el.dataset.action;
+  const busy=(txt)=>{ el.disabled=true; if(el.textContent!==undefined && el.tagName==="BUTTON"){ el.dataset._t=el.textContent; el.textContent=txt; } };
+  const unbusy=()=>{ el.disabled=false; if(el.dataset._t) el.textContent=el.dataset._t; };
+
+  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; if(el.dataset.view==="users"){state.adminUsers=[];state.adminUsersError="";} if(el.dataset.view==="audit"){state.auditLog=[];state.auditError="";} render(); return; }
+  if(action==="logout"){ state.session=null; localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(SESS_KEY); state.view="dashboard"; render(); return; }
+  if(action==="retry"){ state.loadError=""; state.booting=true; boot(); return; }
+
+  if(action==="login"){
+    const email=document.getElementById("login-email").value.trim().toLowerCase();
+    const password=document.getElementById("login-password").value;
+    if(!email||!password){ state.loginError="Saisissez votre e-mail et votre mot de passe."; render(); return; }
+    busy("Connexion…");
+    try{
+      const r = await apiPost({action:"login", email, password});
+      state.session = { token:r.token, email:r.email, name:r.name, role:r.role };
+      localStorage.setItem(TOKEN_KEY, r.token);
+      localStorage.setItem(SESS_KEY, JSON.stringify({email:r.email,name:r.name,role:r.role}));
+      localStorage.setItem(EMAIL_KEY, email);
+      state.loginError=""; state.mustChangePassword=!!r.mustChangePassword;
+      if(!state.mustChangePassword) await refreshTickets();
+      state.view="dashboard";
+      if(state.deepLinkTicket){ state.view="tickets"; state.selectedTicketId=state.deepLinkTicket; }
+      render();
+    }catch(err){ state.loginError=err.message||String(err); render(); }
+    return;
+  }
+
+  if(action==="do-change-password"){
+    const p1=document.getElementById("np1").value, p2=document.getElementById("np2").value;
+    if(p1.length<6){ state.pwChangeError="6 caractères minimum."; render(); return; }
+    if(p1!==p2){ state.pwChangeError="Les deux mots de passe ne correspondent pas."; render(); return; }
+    busy("Enregistrement…");
+    try{
+      await apiPost({action:"changePassword", token:state.session.token, newPassword:p1});
+      state.mustChangePassword=false; state.pwChangeError="";
+      await refreshTickets(); render();
+    }catch(err){ state.pwChangeError=err.message||String(err); render(); }
+    return;
+  }
+
+  if(action==="user-subview"){ state.userSubview=el.dataset.view; state.selectedTicketId=null; render(); return; }
+  if(action==="open-ticket"){ state.selectedTicketId=el.dataset.id; state.reopening=false; render(); return; }
+  if(action==="back"){ state.selectedTicketId=null; state.reopening=false; render(); return; }
+  if(action==="reopen"){ state.reopening=true; render(); return; }
+  if(action==="cancel-reopen"){ state.reopening=false; render(); return; }
+
+  if(action==="submit-ticket"){
+    const service=document.getElementById("t-service").value;
+    const priority=document.getElementById("t-priority").value;
+    const subject=document.getElementById("t-subject").value.trim();
+    const desc=document.getElementById("t-desc").value.trim();
+    const errBox=document.getElementById("form-error");
+    if(!subject||!desc){ errBox.innerHTML=`<div class="error-msg">Le sujet et la description sont obligatoires.</div>`; return; }
+    const ticket={ service, priority, subject, description:desc, module:"", window:"" };
+    if(service==="MEDLOGIX"){ ticket.module=document.getElementById("t-module").value; ticket.window=document.getElementById("t-window").value; }
+    busy("Envoi…");
+    try{ await apiPost({action:"createTicket", token:state.session.token, ticket}); await refreshTickets(); state.userSubview="mine"; render(); }
+    catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); }
+    return;
+  }
+
+  if(action==="user-comment"){
+    const comment=document.getElementById("user-comment").value.trim();
+    const errBox=document.getElementById("act-error");
+    if(!comment){ errBox.innerHTML=`<div class="error-msg">Commentaire vide.</div>`; return; }
+    busy("Envoi…");
+    try{ await apiPost({action:"addComment", token:state.session.token, id:el.dataset.id, comment}); await refreshTickets(); render(); }
+    catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); }
+    return;
+  }
+
+  if(action==="staff-update"){
+    const comment=document.getElementById("staff-comment").value.trim();
+    const status=document.getElementById("staff-status").value;
+    const errBox=document.getElementById("act-error");
+    if(!comment){ errBox.innerHTML=`<div class="error-msg">Un commentaire est requis.</div>`; return; }
+    busy("Enregistrement…");
+    try{ await apiPost({action:"updateStatus", token:state.session.token, id:el.dataset.id, status, comment}); await refreshTickets(); render(); }
+    catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); }
+    return;
+  }
+
+  if(action==="confirm-reopen"){
+    const comment=document.getElementById("staff-comment").value.trim();
+    const errBox=document.getElementById("act-error");
+    if(!comment){ errBox.innerHTML=`<div class="error-msg">Un motif est requis.</div>`; return; }
+    busy("Enregistrement…");
+    try{ await apiPost({action:"reopenTicket", token:state.session.token, id:el.dataset.id, comment}); await refreshTickets(); state.reopening=false; render(); }
+    catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); }
+    return;
+  }
+
+  if(action==="set-priority"){
+    const priority=document.getElementById("prio-select").value;
+    busy("…");
+    try{ await apiPost({action:"updatePriority", token:state.session.token, id:el.dataset.id, priority}); await refreshTickets(); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+
+  if(action==="assign"){
+    const assignee=document.getElementById("assign-input").value.trim();
+    busy("…");
+    try{ await apiPost({action:"assignTicket", token:state.session.token, id:el.dataset.id, assignee}); await refreshTickets(); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+
+  if(action==="export-csv"){ exportCSV(); return; }
+
+  // ---- Admin users ----
+  if(action==="create-user"){
+    const name=document.getElementById("nu-name").value.trim();
+    const email=document.getElementById("nu-email").value.trim().toLowerCase();
+    const password=document.getElementById("nu-password").value;
+    const role=document.getElementById("nu-role").value;
+    const errBox=document.getElementById("user-form-error");
+    busy("Création…");
+    try{ await apiPost({action:"createUser", token:state.session.token, name, email, password, role}); state.adminUsers=await apiGet({type:"users", token:state.session.token}); render(); }
+    catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); }
+    return;
+  }
+  if(action==="change-role"){
+    const email=el.dataset.email, role=el.value;
+    try{ await apiPost({action:"setUserRole", token:state.session.token, email, role}); state.adminUsers=await apiGet({type:"users", token:state.session.token}); render(); }
+    catch(err){ alert(err.message||String(err)); render(); }
+    return;
+  }
+  if(action==="reset-pw"){
+    const email=el.dataset.email;
+    const np=prompt("Nouveau mot de passe pour "+email+" (6 caractères min.) :");
+    if(np===null) return;
+    try{ await apiPost({action:"resetPassword", token:state.session.token, email, newPassword:np}); alert("Mot de passe réinitialisé. L'utilisateur devra le changer à la prochaine connexion."); }
+    catch(err){ alert(err.message||String(err)); }
+    return;
+  }
+  if(action==="toggle-active"){
+    const email=el.dataset.email, active=el.dataset.active==="1";
+    busy("…");
+    try{ await apiPost({action:"setUserActive", token:state.session.token, email, active}); state.adminUsers=await apiGet({type:"users", token:state.session.token}); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="del-user"){
+    const email=el.dataset.email;
+    if(!confirm("Supprimer "+email+" ? Action irréversible.")) return;
+    busy("…");
+    try{ await apiPost({action:"deleteUser", token:state.session.token, email}); state.adminUsers=await apiGet({type:"users", token:state.session.token}); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+}
+
+function exportCSV(){
+  const cols=["ID","Service","Module","Window","Priority","Subject","Requester name","Requester email","Status","Assigned","Created (local)","Days open","Last comment"];
+  const rows=tickets.map(t=>{
+    const last=[...(t.history||[])].reverse().find(h=>h.type==="comment"||h.type==="status"||h.type==="reopen");
+    return [t.id,t.service,t.module||"",t.window||"",t.priority,t.subject,t.requesterName,t.requesterEmail,t.status,t.assignedTo||"",new Date(Number(t.createdAt)).toLocaleString("fr-FR"),String(daysSince(t.createdAt)),last?(last.comment||(last.from+"→"+last.to)).replace(/\n/g," "):""];
+  });
+  const csv=[cols,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+  const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob);
+  const a=document.createElement("a"); a.href=url; a.download="medlog_tickets_export.csv"; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+// ---- Go ----
+boot();
+</script>
+</body>
+</html>
