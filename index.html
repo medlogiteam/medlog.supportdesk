@@ -489,7 +489,7 @@ function renderUserTickets(){
 
 function renderNewTicketForm(){
   const svcOpts = SERVICES.map(s=>`<option value="${esc(s)}" ${state.newService===s?'selected':''}>${esc(s)}</option>`).join("");
-  const prioOpts = PRIORITIES.map(p=>`<option value="${esc(p)}">${esc(p)}</option>`).join("");
+ const prioOpts = PRIORITIES.map(p=>`<option value="${esc(p)}" ${p==="Low"?"selected":""}>${esc(p)}</option>`).join("");
   const isMedlogix = state.newService === "MEDLOGIX";
   let medlogixFields = "";
   if(isMedlogix){
