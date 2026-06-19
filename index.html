@@ -214,8 +214,8 @@ const SERVICES = [
 ];
 // Module → écrans (uniquement quand SERVICE = MEDLOGIX). Corrigez librement.
 const MODULE_TREE = {
-  "Freight Management": ["Quotation","Job","Payment Request","Supplier Invoice","Customer Invoice/Credit Note","General Service Charge","Charge Item","Charge Template","Event","Freight Job Query","Freight Quotation Query","Customer Invoice Query","Query – Sale & Cost Sheet","Contact","Debtors Credit Limit","Supplier"],
-  "Arrivela": ["Job Planning","trip tracking","Vehicle Servicing Costs","Resource Unavailability","Trip Report","Vehicle Servicing Costs Report","Trip Tracking Report"],
+  "Freight Management": ["Quotation","Job","Trip Tracking","Payment Request","Supplier Invoice","Customer Invoice / Credit Note","General Service Charge","Charge Item","Charge Template","Event","Freight Job Query","Freight Quotation Query","Customer Invoice Query","Query – Sale & Cost Sheet","Contact","Debtors Credit Limit","Supplier"],
+  "Arrivela": ["Job Planning","Vehicle Servicing Costs","Resource Unavailability","Trip Report","Vehicle Servicing Costs Report","Trip Tracking Report"],
   "Dashboard": ["Quotations Dashboard","Job Dashboard","Event Dashboard","Vehicle Dashboard","User Management","Revenue by Clients Report","HAD Report"]
 };
 const PRIORITIES = ["Critical","High","Medium","Low"];
@@ -224,6 +224,7 @@ const SLA_DAYS = 2;
 const ROLE_LABEL = { admin:"Admin", super:"Super User", user:"Utilisateur" };
 
 const TOKEN_KEY = "medlog_token", SESS_KEY = "medlog_session", EMAIL_KEY = "medlog_email";
+const MON_CREDS_KEY = "medlog_mon_creds"; // identifiants du compte mur d'écran, pour reconnexion auto 24/7
 
 // ------------------------ API layer ------------------------
 async function apiGet(params){
@@ -311,7 +312,10 @@ async function boot(){
   render();
   if(state.session){
     try{ await refreshTickets(); state.lastSync=Date.now(); }
-    catch(e){ state.session=null; localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(SESS_KEY); }
+    catch(e){
+      if(await monRelogin()){ try{ await refreshTickets(); state.lastSync=Date.now(); }catch(e2){} }
+      else { state.session=null; localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(SESS_KEY); }
+    }
   }
   state.booting = false;
   if(state.session && isMonitor()){ state.view = "monitor"; }
@@ -319,6 +323,21 @@ async function boot(){
   render();
 }
 async function refreshTickets(){ tickets = await apiGet({ type:"tickets", token: state.session.token }); }
+
+// Reconnexion silencieuse du compte mur d'écran (fonctionnement 24/7).
+// Le jeton de session expire après 6 h ; on se reconnecte automatiquement avec
+// les identifiants stockés localement pour ce poste de supervision.
+async function monRelogin(){
+  try{
+    const c = JSON.parse(localStorage.getItem(MON_CREDS_KEY)||"null");
+    if(!c || !c.email || !c.password) return false;
+    const r = await apiPost({action:"login", email:c.email, password:c.password});
+    state.session = { token:r.token, email:r.email, name:r.name, role:r.role };
+    localStorage.setItem(TOKEN_KEY, r.token);
+    localStorage.setItem(SESS_KEY, JSON.stringify({email:r.email,name:r.name,role:r.role}));
+    return true;
+  }catch(e){ return false; }
+}
 
 // ------------------------ Auto-refresh (monitoring) ------------------------
 let monDataTimer=null, monClockTimer=null;
@@ -328,7 +347,14 @@ function ensureMonitorTimers(){
     monDataTimer = setInterval(async ()=>{
       if(!isMonitor()){ clearInterval(monDataTimer); monDataTimer=null; return; }
       try{ await refreshTickets(); state.lastSync=Date.now(); state.monStale=false; render(); }
-      catch(e){ state.monStale=true; render(); }
+      catch(e){
+        // Reconnexion silencieuse puis nouvel essai (fonctionnement 24/7).
+        if(await monRelogin()){
+          try{ await refreshTickets(); state.lastSync=Date.now(); state.monStale=false; }
+          catch(e2){ state.monStale=true; }
+        } else { state.monStale=true; }
+        render();
+      }
     }, 45000);
   }
   if(on && !monClockTimer){
@@ -869,7 +895,7 @@ function renderUsers(){
   }).join("")}</div>`;
 
   return `<h1 class="page-title">Utilisateurs</h1>
-    <p class="page-sub">Comptes créés uniquement par l'administrateur. L'identifiant de connexion est l'adresse e-mail. Super Users : ${superCount}/2.</p>
+    <p class="page-sub">Comptes créés uniquement par l'administrateur. L'identifiant de connexion est l'adresse e-mail. Super Users : ${superCount}/10.</p>
     <div class="card" style="margin-bottom:20px;">
       <div class="section-label">Créer un utilisateur</div>
       <div class="field-row">
@@ -928,7 +954,7 @@ async function onAction(e){
   if(action==="fullscreen"){ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(err){} return; }
   if(action==="print-report"){ window.print(); return; }
   if(action==="export-medlogix"){ exportCSV(t=>t.service==="MEDLOGIX","medlog_medlogix_export.csv"); return; }
-  if(action==="logout"){ state.session=null; localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(SESS_KEY); state.view="dashboard"; render(); return; }
+  if(action==="logout"){ state.session=null; localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(SESS_KEY); localStorage.removeItem(MON_CREDS_KEY); state.view="dashboard"; render(); return; }
   if(action==="retry"){ state.loadError=""; state.booting=true; boot(); return; }
 
   if(action==="login"){
@@ -942,6 +968,7 @@ async function onAction(e){
       localStorage.setItem(TOKEN_KEY, r.token);
       localStorage.setItem(SESS_KEY, JSON.stringify({email:r.email,name:r.name,role:r.role}));
       localStorage.setItem(EMAIL_KEY, email);
+      if(isMonitor()){ try{ localStorage.setItem(MON_CREDS_KEY, JSON.stringify({email, password})); }catch(e){} }
       state.loginError=""; state.mustChangePassword=!!r.mustChangePassword;
       if(!state.mustChangePassword){ await refreshTickets(); state.lastSync=Date.now(); }
       state.view = isMonitor() ? "monitor" : "dashboard";
