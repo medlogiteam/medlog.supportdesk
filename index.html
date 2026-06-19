@@ -150,6 +150,39 @@
   .hint{font-size:11.5px; color:var(--ink-faint); margin-top:8px;}
   footer.app-footer{text-align:center; font-size:11.5px; color:var(--ink-faint); padding:18px; border-top:1px solid var(--border);}
   .tz-note{font-size:11px; color:var(--ink-faint); margin-top:6px;}
+
+  /* ===== Monitoring (mur d'écran) ===== */
+  .monitor-wrap{width:100%;}
+  .mon{background:#0b1322; color:#e7eef8; min-height:calc(100vh - 58px); padding:18px 22px;}
+  .mon-kpis{display:grid; grid-template-columns:repeat(6,1fr); gap:12px; margin-bottom:16px;}
+  @media (max-width:980px){.mon-kpis{grid-template-columns:repeat(3,1fr);}}
+  .mon-kpi{background:#131f33; border:1px solid #20304a; border-radius:12px; padding:16px 18px;}
+  .mon-kpi .n{font-family:var(--mono); font-size:36px; font-weight:800; line-height:1; color:#fff;}
+  .mon-kpi .l{font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:#90a4c2; margin-top:7px;}
+  .mon-kpi.amber .n{color:#ffb454;} .mon-kpi.blue .n{color:#5ca8ff;} .mon-kpi.violet .n{color:#b794f6;} .mon-kpi.pink .n{color:#f06fa6;} .mon-kpi.red .n{color:#ff6b6b;} .mon-kpi.green .n{color:#5cd6a0;}
+  .mon-grid{display:grid; grid-template-columns:2fr 1fr; gap:16px;}
+  @media (max-width:980px){.mon-grid{grid-template-columns:1fr;}}
+  .mon-panel{background:#101b2e; border:1px solid #20304a; border-radius:12px; padding:14px 16px; margin-bottom:16px;}
+  .mon-panel h3{font-size:12px; text-transform:uppercase; letter-spacing:.7px; color:#9fb3d1; margin:0 0 12px;}
+  table.mon-table{width:100%; border-collapse:collapse;}
+  table.mon-table th{font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:#7e93b3; text-align:left; padding:6px 8px; border-bottom:1px solid #21304a;}
+  table.mon-table td{padding:10px 8px; border-bottom:1px solid #182539; font-size:14px; color:#d7e2f0; vertical-align:middle;}
+  .mon-id{font-family:var(--mono); font-size:12px; color:#8fb4e6;}
+  .mon-subj{font-weight:600;}
+  .mon-age{font-family:var(--mono); font-size:13px;}
+  .mon-age.over{color:#ff6b6b; font-weight:700;}
+  .mon-foot{display:flex; justify-content:space-between; color:#7e93b3; font-size:12px; margin-top:6px; flex-wrap:wrap; gap:8px;}
+  .mon-stale{background:#3a1f1f; color:#ff9b9b; border:1px solid #5a2a2a; border-radius:8px; padding:8px 12px; font-size:12.5px; margin-bottom:12px;}
+  .mon-other{display:flex; gap:8px; flex-wrap:wrap;}
+  .mon-other .chip{background:#16233a; border:1px solid #223150; border-radius:20px; padding:5px 11px; font-size:12px; color:#b9cae3;}
+
+  /* ===== Impression du rapport ===== */
+  @media print{
+    header.topbar, .no-print{display:none!important;}
+    body{background:#fff;}
+    main{max-width:none; padding:0;}
+    .card{break-inside:avoid;}
+  }
 </style>
 </head>
 <body>
@@ -158,11 +191,15 @@
 <script>
 /* =========================================================================
    MEDLOG Support Desk — client (hébergeable sur GitHub Pages)
-   Backend : Google Apps Script (voir medlog-backend.gs). RBAC côté serveur.
+   Backend : Google Apps Script. RBAC côté serveur.
+   + Mode Monitoring / Rapport pour le compte view@medlog.com (lecture seule).
    ========================================================================= */
 
-// ⚠ À REMPLIR : URL du Web App Apps Script déployé (se termine par /exec)
+// ⚠ URL du Web App Apps Script déployé (se termine par /exec)
 const API_URL = "https://script.google.com/macros/s/AKfycbziFztMKmvd8Qd_6ijtau3WZQSOnfIGWdXqvLLd5Lqa-hYXCbFffSI57mx44hFf5d53/exec";
+
+// Compte de supervision (mur d'écran). Doit être créé en SUPER USER par l'admin.
+const MONITOR_EMAIL = "view@medlog.com";
 
 const SERVICES = [
   "MEDLOGIX",
@@ -177,11 +214,9 @@ const SERVICES = [
 ];
 // Module → écrans (uniquement quand SERVICE = MEDLOGIX). Corrigez librement.
 const MODULE_TREE = {
-  "Freight Management": ["Quotation","Job","Trip Tracking","Payment Request","Supplier Invoice","Customer Invoice / Credit Note","General Service Charge","Charge Item","Charge Template","Event","Freight Job Query","Freight Quotation Query","Customer Invoice Query","Query – Sale & Cost Sheet","Contact","Debtors Credit Limit","Supplier"],
-  "Arrivela": ["Job Planning","Vehicle Servicing Costs","Resource Unavailability","Trip Report","Vehicle Servicing Costs Report","Trip Tracking Report"],
-
-  "Dashboard": ["Quotations Dashboard","Job Dashboard","Event Dashboard","Vehicle Dashboard","User Management","Revenue by Clients Report","HAD Report"],
-
+  "Freight Management": ["Quotation","Job","Payment Request","Supplier Invoice","Customer Invoice/Credit Note","General Service Charge","Charge Item","Charge Template","Event","Freight Job Query","Freight Quotation Query","Customer Invoice Query","Query – Sale & Cost Sheet","Contact","Debtors Credit Limit","Supplier"],
+  "Arrivela": ["Job Planning","trip tracking","Vehicle Servicing Costs","Resource Unavailability","Trip Report","Vehicle Servicing Costs Report","Trip Tracking Report"],
+  "Dashboard": ["Quotations Dashboard","Job Dashboard","Event Dashboard","Vehicle Dashboard","User Management","Revenue by Clients Report","HAD Report"]
 };
 const PRIORITIES = ["Critical","High","Medium","Low"];
 const STATUSES = ["Pending","In Progress","Testing","Closed","Reopened"];
@@ -200,7 +235,6 @@ async function apiGet(params){
   return data;
 }
 async function apiPost(body){
-  // text/plain => requête "simple", pas de pré-vol CORS (indispensable depuis GitHub Pages).
   const res = await fetch(API_URL, { method:"POST", body: JSON.stringify(body) });
   const data = await res.json();
   if(data && data.error) throw new Error(data.error);
@@ -212,26 +246,25 @@ let tickets = [];
 let state = {
   booting: true,
   loadError: "",
-  view: "dashboard",            // dashboard | tickets | users | audit
-  session: null,                // { token, email, name, role }
+  view: "dashboard",            // dashboard | tickets | users | audit | monitor | report
+  session: null,
   loginError: "", loginEmailPrefill: localStorage.getItem(EMAIL_KEY) || "",
   mustChangePassword: false, pwChangeError:"", pwChangeOk:false,
-  userSubview: "new",           // new | mine
+  userSubview: "new",
   selectedTicketId: null, reopening:false,
   newService: SERVICES[0],
   filter: { status:"all", service:"all", priority:"all", search:"" },
   dashPeriod: "this_month", customFrom:"", customTo:"",
   adminUsers: [], adminUsersError:"",
   auditLog: [], auditError:"",
-  deepLinkTicket: null
+  deepLinkTicket: null,
+  lastSync: 0, monStale: false
 };
 
 // ------------------------ Utilities ------------------------
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
-function fmtDate(ts){ // affiche TOUJOURS dans le fuseau local du navigateur (timestamps stockés en epoch UTC)
-  const d = new Date(Number(ts));
-  return d.toLocaleDateString("fr-FR",{day:"2-digit",month:"short",year:"numeric"}) + " · " + d.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"});
-}
+function fmtDate(ts){ const d=new Date(Number(ts)); return d.toLocaleDateString("fr-FR",{day:"2-digit",month:"short",year:"numeric"})+" · "+d.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"}); }
+function fmtTime(ts){ return new Date(Number(ts)).toLocaleTimeString("fr-FR"); }
 function localTZ(){ try{ return Intl.DateTimeFormat().resolvedOptions().timeZone; }catch(e){ return "local"; } }
 function daysSince(ts){ return Math.floor((Date.now()-Number(ts))/86400000); }
 function isOverdue(t){ return t.status!=="Closed" && daysSince(t.createdAt) >= SLA_DAYS; }
@@ -241,10 +274,11 @@ function priorityRank(p){ return {"Critical":0,"High":1,"Medium":2,"Low":3}[p] ?
 function statusRank(s){ return {"Reopened":0,"Pending":1,"In Progress":2,"Testing":3,"Closed":4}[s] ?? 5; }
 function getTicket(id){ return tickets.find(t=>t.id===id); }
 function isStaff(){ return state.session && (state.session.role==="admin"||state.session.role==="super"); }
-function canChangePriority(){ return isStaff(); }
+function isMonitor(){ return state.session && String(state.session.email).toLowerCase() === MONITOR_EMAIL; }
+function medlogixTickets(){ return tickets.filter(t=>t.service==="MEDLOGIX"); }
 
 function periodRange(){
-  const now = new Date(); const start = new Date(now); start.setHours(0,0,0,0);
+  const now = new Date();
   const out = { from:0, to:Date.now()+1 };
   const startOfDay = d=>{ const x=new Date(d); x.setHours(0,0,0,0); return x.getTime(); };
   const endOfDay = d=>{ const x=new Date(d); x.setHours(23,59,59,999); return x.getTime(); };
@@ -262,51 +296,79 @@ function periodRange(){
 }
 function inPeriod(t){ const r=periodRange(); return Number(t.createdAt)>=r.from && Number(t.createdAt)<=r.to; }
 
-function render(){ document.getElementById("app").innerHTML = renderApp(); bindEvents(); }
+function render(){ document.getElementById("app").innerHTML = renderApp(); bindEvents(); ensureMonitorTimers(); }
 
 // ------------------------ Boot ------------------------
 async function boot(){
-  // restaure une session éventuelle
   try{
     const sess = JSON.parse(localStorage.getItem(SESS_KEY)||"null");
     const token = localStorage.getItem(TOKEN_KEY);
     if(sess && token){ state.session = Object.assign({}, sess, { token }); }
   }catch(e){}
-  // deep link e-mail (#ticket=ERP-...)
   const m = (location.hash||"").match(/ticket=([^&]+)/);
   if(m) state.deepLinkTicket = decodeURIComponent(m[1]);
 
   render();
   if(state.session){
-    try{ await refreshTickets(); }
-    catch(e){ // token périmé → on déconnecte proprement
-      state.session = null; localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(SESS_KEY);
-    }
+    try{ await refreshTickets(); state.lastSync=Date.now(); }
+    catch(e){ state.session=null; localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(SESS_KEY); }
   }
   state.booting = false;
-  if(state.deepLinkTicket && state.session){ state.view="tickets"; state.selectedTicketId = state.deepLinkTicket; }
+  if(state.session && isMonitor()){ state.view = "monitor"; }
+  else if(state.deepLinkTicket && state.session){ state.view="tickets"; state.selectedTicketId = state.deepLinkTicket; }
   render();
 }
 async function refreshTickets(){ tickets = await apiGet({ type:"tickets", token: state.session.token }); }
 
+// ------------------------ Auto-refresh (monitoring) ------------------------
+let monDataTimer=null, monClockTimer=null;
+function ensureMonitorTimers(){
+  const on = isMonitor() && !state.booting && !state.mustChangePassword;
+  if(on && !monDataTimer){
+    monDataTimer = setInterval(async ()=>{
+      if(!isMonitor()){ clearInterval(monDataTimer); monDataTimer=null; return; }
+      try{ await refreshTickets(); state.lastSync=Date.now(); state.monStale=false; render(); }
+      catch(e){ state.monStale=true; render(); }
+    }, 45000);
+  }
+  if(on && !monClockTimer){
+    monClockTimer = setInterval(()=>{ const c=document.getElementById("mon-clock"); if(c) c.textContent=new Date().toLocaleTimeString("fr-FR"); }, 1000);
+  }
+  if(!on){
+    if(monDataTimer){ clearInterval(monDataTimer); monDataTimer=null; }
+    if(monClockTimer){ clearInterval(monClockTimer); monClockTimer=null; }
+  }
+}
+
 // =========================== RENDER ROOT ===========================
 function renderApp(){
+  if(state.session && isMonitor() && !state.booting && !state.mustChangePassword && !state.loadError){
+    return `${renderHeader()}<div class="monitor-wrap">${renderMain()}</div>`;
+  }
   return `${renderHeader()}<main>${renderMain()}</main><footer class="app-footer">MEDLOG — Support Desk</footer>`;
 }
 
 function renderHeader(){
   let nav = "", session = "";
-  if(state.session){
+  if(state.session && isMonitor()){
+    nav = `<div class="topnav">
+      <button data-action="mon-nav" data-view="monitor" class="${state.view==='monitor'?'active':''}">Monitoring</button>
+      <button data-action="mon-nav" data-view="report" class="${state.view==='report'?'active':''}">Rapport</button>
+    </div>`;
+    session = `<div class="session-info"><span id="mon-clock" class="role-chip" style="font-family:var(--mono);letter-spacing:.5px;">${new Date().toLocaleTimeString("fr-FR")}</span>
+      <button class="link" data-action="refresh-now">actualiser</button>
+      <button class="link" data-action="fullscreen">plein écran</button>
+      <button class="link" data-action="logout">quitter</button></div>`;
+  } else if(state.session){
     const role = state.session.role;
     const tabs = [["dashboard","Tableau de bord"]];
-    if(role==="user") tabs.push(["tickets","Mes tickets"]);
-    else tabs.push(["tickets","Tickets"]);
+    if(role==="user") tabs.push(["tickets","Mes tickets"]); else tabs.push(["tickets","Tickets"]);
     if(role==="admin"){ tabs.push(["users","Utilisateurs"]); tabs.push(["audit","Audit"]); }
     nav = `<div class="topnav">${tabs.map(([v,l])=>`<button data-action="nav" data-view="${v}" class="${state.view===v?'active':''}">${l}</button>`).join("")}</div>`;
     session = `<div class="session-info"><span class="role-chip">${ROLE_LABEL[role]||role}</span>${esc(state.session.name)}<button class="link" data-action="logout">déconnexion</button></div>`;
   }
   return `<header class="topbar">
-    <div class="brand"><div class="mark">ML</div><div><div class="name">MEDLOG Support Desk</div><div class="sub">Tickets</div></div></div>
+    <div class="brand"><div class="mark">ML</div><div><div class="name">MEDLOG Support Desk</div><div class="sub">${isMonitor()?"Monitoring":"Tickets"}</div></div></div>
     ${nav}${session}
   </header>`;
 }
@@ -316,6 +378,7 @@ function renderMain(){
   if(!state.session) return renderLogin();
   if(state.mustChangePassword) return renderForcePassword();
   if(state.loadError) return renderLoadError();
+  if(isMonitor()) return state.view==="report" ? renderReport() : renderMonitor();
   if(state.view==="dashboard") return renderDashboard();
   if(state.view==="tickets") return renderTicketsArea();
   if(state.view==="users") return state.session.role==="admin" ? renderUsers() : renderDashboard();
@@ -323,9 +386,7 @@ function renderMain(){
   return "";
 }
 
-function renderLoading(){
-  return `<div class="gate"><h1>Connexion en cours…</h1><p>Merci de patienter un moment.</p></div>`;
-}
+function renderLoading(){ return `<div class="gate"><h1>Connexion en cours…</h1><p>Merci de patienter un moment.</p></div>`; }
 function renderLoadError(){
   return `<div class="gate"><h1>Connexion impossible</h1><p>Le backend n'a pas pu être joint.</p>
     <div class="card"><div class="error-msg" style="margin-bottom:12px;">${esc(state.loadError)}</div>
@@ -363,14 +424,92 @@ function renderForcePassword(){
   </div>`;
 }
 
-// =========================== DASHBOARD ===========================
-function scopedTickets(){ return tickets.filter(inPeriod); }
+// =========================== MONITORING (mur d'écran) ===========================
+function monActiveMedlogix(){
+  return medlogixTickets()
+    .filter(t=>t.status==="In Progress"||t.status==="Testing"||t.status==="Pending"||t.status==="Reopened")
+    .sort((a,b)=> statusRank(a.status)-statusRank(b.status) || priorityRank(a.priority)-priorityRank(b.priority) || Number(a.createdAt)-Number(b.createdAt));
+}
+function monBars(items){
+  if(!items.length) return `<div style="color:#7e93b3;font-size:13px;">Aucune donnée.</div>`;
+  const max = Math.max(1,...items.map(i=>i.count));
+  return items.map(i=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;">
+    <div style="width:130px;font-size:12px;color:#9fb3d1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(i.label)}">${esc(i.label)}</div>
+    <div style="flex:1;height:7px;background:#1c2a42;border-radius:5px;overflow:hidden;"><div style="height:100%;width:${Math.round(i.count/max*100)}%;background:#3aa0ff;border-radius:5px;"></div></div>
+    <div style="font-family:var(--mono);font-size:12px;width:24px;text-align:right;color:#cfe0f5;">${i.count}</div></div>`).join("");
+}
 
-function renderDashboard(){
-  const data = scopedTickets();
-  const count = s => data.filter(t=>t.status===s).length;
-  const total = data.length;
-  const open = data.filter(t=>t.status!=="Closed").length;
+function renderMonitor(){
+  const ml = medlogixTickets();
+  const c = s => ml.filter(t=>t.status===s).length;
+  const openCount = ml.filter(t=>t.status!=="Closed").length;
+  const overdueCount = ml.filter(isOverdue).length;
+
+  const kpis = `<div class="mon-kpis">
+    <div class="mon-kpi"><div class="n">${openCount}</div><div class="l">MEDLOGIX ouverts</div></div>
+    <div class="mon-kpi amber"><div class="n">${c("Pending")}</div><div class="l">Pending</div></div>
+    <div class="mon-kpi blue"><div class="n">${c("In Progress")}</div><div class="l">In Progress</div></div>
+    <div class="mon-kpi violet"><div class="n">${c("Testing")}</div><div class="l">Testing</div></div>
+    <div class="mon-kpi pink"><div class="n">${c("Reopened")}</div><div class="l">Reopened</div></div>
+    <div class="mon-kpi red"><div class="n">${overdueCount}</div><div class="l">En retard</div></div>
+  </div>`;
+
+  const active = monActiveMedlogix();
+  const rows = active.slice(0,14).map(t=>{
+    const over = isOverdue(t);
+    const mod = t.module ? esc(t.module)+(t.window?(" / "+esc(t.window)):"") : "—";
+    return `<tr>
+      <td class="mon-id">${t.id}</td>
+      <td class="mon-subj">${esc(t.subject)}</td>
+      <td style="color:#9fb3d1;font-size:12.5px;">${mod}</td>
+      <td><span class="badge priority-${t.priority}">${esc(t.priority)}</span></td>
+      <td><span class="badge ${statusClass(t.status)}">${esc(t.status)}</span></td>
+      <td style="color:#9fb3d1;font-size:12.5px;">${t.assignedTo?esc(t.assignedTo):"—"}</td>
+      <td class="mon-age ${over?'over':''}">${daysSince(t.createdAt)} j</td>
+    </tr>`;
+  }).join("");
+  const mainPanel = `<div class="mon-panel">
+    <h3>Tâches MEDLOGIX à traiter (${active.length}) — les plus anciennes en tête</h3>
+    ${active.length?`<table class="mon-table"><thead><tr><th>N°</th><th>Sujet</th><th>Module</th><th>Priorité</th><th>Statut</th><th>Affecté à</th><th>Âge</th></tr></thead><tbody>${rows}</tbody></table>`
+      :`<div style="color:#7e93b3;padding:24px 0;text-align:center;">Aucune tâche MEDLOGIX en cours. 🎉</div>`}
+  </div>`;
+
+  const byStatus = STATUSES.filter(s=>s!=="Closed").map(s=>({label:s,count:c(s)})).filter(i=>i.count>0);
+  const byModule = (()=>{ const m={}; ml.filter(t=>t.status!=="Closed").forEach(t=>{ const k=t.module||"—"; m[k]=(m[k]||0)+1; }); return Object.keys(m).map(k=>({label:k,count:m[k]})).sort((a,b)=>b.count-a.count).slice(0,8); })();
+
+  // Autres services (compte uniquement, non prioritaires)
+  const others = (()=>{ const m={}; tickets.filter(t=>t.service!=="MEDLOGIX"&&t.status!=="Closed").forEach(t=>{ m[t.service]=(m[t.service]||0)+1; }); return Object.keys(m).map(k=>({label:k,count:m[k]})); })();
+  const othersTotal = others.reduce((a,b)=>a+b.count,0);
+
+  const sidePanel = `
+    <div class="mon-panel"><h3>Répartition par statut (MEDLOGIX)</h3>${monBars(byStatus)}</div>
+    <div class="mon-panel"><h3>Par module (ouverts)</h3>${monBars(byModule)}</div>
+    <div class="mon-panel"><h3>Autres services (non prioritaires) — ${othersTotal} ouverts</h3>
+      <div class="mon-other">${others.length?others.map(o=>`<span class="chip">${esc(o.label.split(" (")[0])} : ${o.count}</span>`).join(""):'<span style="color:#7e93b3;font-size:12.5px;">Aucun</span>'}</div>
+    </div>`;
+
+  const stale = state.monStale ? `<div class="mon-stale">⚠ Synchronisation interrompue (session peut-être expirée). Affichage des dernières données connues. Reconnexion conseillée.</div>` : "";
+
+  return `<div class="mon">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+      <div style="font-size:20px;font-weight:800;">Monitoring MEDLOGIX — avancement des tâches</div>
+      <div style="font-size:12px;color:#7e93b3;">Heure locale (${esc(localTZ())})</div>
+    </div>
+    ${stale}
+    ${kpis}
+    <div class="mon-grid"><div>${mainPanel}</div><div>${sidePanel}</div></div>
+    <div class="mon-foot">
+      <span>Dernière synchro : ${state.lastSync?fmtTime(state.lastSync):"—"} · actualisation automatique toutes les 45 s</span>
+      <span>${ml.length} tickets MEDLOGIX au total · ${ml.filter(t=>t.status==="Closed").length} clos</span>
+    </div>
+  </div>`;
+}
+
+// =========================== RAPPORT ===========================
+function renderReport(){
+  const data = tickets.filter(inPeriod);
+  const ml = data.filter(t=>t.service==="MEDLOGIX");
+  const c = s => ml.filter(t=>t.status===s).length;
 
   const periods = [["today","Aujourd'hui"],["yesterday","Hier"],["last7","7 derniers jours"],["this_month","Ce mois"],["prev_month","Mois précédent"],["this_year","Cette année"],["custom","Période personnalisée"]];
   const periodSelect = `<select id="dash-period">${periods.map(([v,l])=>`<option value="${v}" ${state.dashPeriod===v?'selected':''}>${l}</option>`).join("")}</select>`;
@@ -378,7 +517,64 @@ function renderDashboard(){
     <div class="field" style="margin-bottom:0;"><label>Du</label><input type="date" id="cf" value="${esc(state.customFrom)}"></div>
     <div class="field" style="margin-bottom:0;"><label>Au</label><input type="date" id="ct" value="${esc(state.customTo)}"></div>` : "";
 
-  // KPI (§19)
+  const avg = (()=>{ const ds=ml.filter(t=>t.status==="Closed").map(t=>{ const e=[...(t.history||[])].reverse().find(h=>h.to==="Closed"); return ((e?e.date:Date.now())-Number(t.createdAt))/86400000; }); return ds.length?(ds.reduce((a,b)=>a+b,0)/ds.length):null; })();
+
+  const tiles = `<div class="stat-row">
+    <div class="stat"><div class="n">${ml.length}</div><div class="l">MEDLOGIX (total)</div></div>
+    <div class="stat accent"><div class="n">${ml.filter(t=>t.status!=="Closed").length}</div><div class="l">Ouverts</div></div>
+    <div class="stat accent"><div class="n">${c("In Progress")}</div><div class="l">In Progress</div></div>
+    <div class="stat accent"><div class="n">${c("Testing")}</div><div class="l">Testing</div></div>
+    <div class="stat"><div class="n">${c("Closed")}</div><div class="l">Closed</div></div>
+    <div class="stat"><div class="n">${avg==null?'—':avg.toFixed(1)+'j'}</div><div class="l">Tps moyen résol.</div></div>
+  </div>`;
+
+  const grp = (arr,key)=>{ const m={}; arr.forEach(t=>{ const k=key(t)||"—"; m[k]=(m[k]||0)+1; }); return Object.keys(m).map(k=>[k,m[k]]).sort((a,b)=>b[1]-a[1]); };
+  const tbl = (title,pairs)=>`<div class="card" style="margin-bottom:16px;"><div class="section-label">${title}</div>
+    <table class="audit"><tbody>${pairs.length?pairs.map(([k,v])=>`<tr><td>${esc(k)}</td><td style="text-align:right;font-family:var(--mono);">${v}</td></tr>`).join(""):`<tr><td>Aucune donnée</td><td></td></tr>`}</tbody></table></div>`;
+
+  const open = ml.filter(t=>t.status!=="Closed").sort((a,b)=>statusRank(a.status)-statusRank(b.status)||priorityRank(a.priority)-priorityRank(b.priority)||Number(a.createdAt)-Number(b.createdAt));
+  const openRows = open.map(t=>`<tr>
+    <td class="ticket-id">${t.id}</td><td>${esc(t.subject)}</td>
+    <td>${t.module?esc(t.module):"—"}</td>
+    <td>${esc(t.priority)}</td><td>${esc(t.status)}</td>
+    <td>${esc(t.requesterName||t.requesterEmail)}</td>
+    <td>${t.assignedTo?esc(t.assignedTo):"—"}</td>
+    <td style="font-family:var(--mono);">${daysSince(t.createdAt)} j</td></tr>`).join("");
+
+  return `<h1 class="page-title">Rapport MEDLOGIX</h1>
+    <p class="page-sub">Synthèse de l'avancement des tâches MEDLOGIX — généré le ${fmtDate(Date.now())} (${esc(localTZ())}).</p>
+    <div class="filters no-print"><div class="field" style="margin-bottom:0;"><label>Période</label>${periodSelect}</div>${customRange}
+      <button class="btn secondary" data-action="print-report">Imprimer / PDF</button>
+      <button class="btn secondary" data-action="export-medlogix">Exporter CSV (MEDLOGIX)</button>
+    </div>
+    ${tiles}
+    <div class="two-col">
+      ${tbl("Par statut", grp(ml,t=>t.status))}
+      ${tbl("Par priorité", grp(ml,t=>t.priority))}
+    </div>
+    <div class="two-col">
+      ${tbl("Par module", grp(ml,t=>t.module))}
+      ${tbl("Par agent affecté", grp(ml,t=>t.assignedTo||"Non affecté"))}
+    </div>
+    <div class="card"><div class="section-label">Tâches MEDLOGIX ouvertes (${open.length})</div>
+      ${open.length?`<div style="overflow-x:auto;"><table class="audit"><thead><tr><th>N°</th><th>Sujet</th><th>Module</th><th>Priorité</th><th>Statut</th><th>Demandeur</th><th>Affecté</th><th>Âge</th></tr></thead><tbody>${openRows}</tbody></table></div>`:`<div class="empty-state">Aucune tâche ouverte sur cette période.</div>`}
+    </div>`;
+}
+
+// =========================== DASHBOARD (rôles standards) ===========================
+function scopedTickets(){ return tickets.filter(inPeriod); }
+
+function renderDashboard(){
+  const data = scopedTickets();
+  const count = s => data.filter(t=>t.status===s).length;
+  const total = data.length;
+
+  const periods = [["today","Aujourd'hui"],["yesterday","Hier"],["last7","7 derniers jours"],["this_month","Ce mois"],["prev_month","Mois précédent"],["this_year","Cette année"],["custom","Période personnalisée"]];
+  const periodSelect = `<select id="dash-period">${periods.map(([v,l])=>`<option value="${v}" ${state.dashPeriod===v?'selected':''}>${l}</option>`).join("")}</select>`;
+  const customRange = state.dashPeriod==="custom" ? `
+    <div class="field" style="margin-bottom:0;"><label>Du</label><input type="date" id="cf" value="${esc(state.customFrom)}"></div>
+    <div class="field" style="margin-bottom:0;"><label>Au</label><input type="date" id="ct" value="${esc(state.customTo)}"></div>` : "";
+
   const avgRes = avgResolution(data);
   const kpis = `<div class="stat-row">
     <div class="stat"><div class="n">${total}</div><div class="l">Total tickets</div></div>
@@ -402,13 +598,11 @@ function renderDashboard(){
     <div class="card"><div class="section-label">Tendance mensuelle (12 mois)</div>${monthlyTrend(data)}</div>
   </div>`;
 
-  // En cours / Testing mis en avant (§2)
   const active = data.filter(t=>t.status==="In Progress"||t.status==="Testing"||t.status==="Reopened")
     .sort((a,b)=>statusRank(a.status)-statusRank(b.status)||priorityRank(a.priority)-priorityRank(b.priority));
   const activeBlock = `<div class="card" style="margin-bottom:18px;"><div class="section-label">À traiter en priorité — In Progress / Testing / Reopened</div>
     ${active.length?`<div class="ticket-list">${active.slice(0,8).map(rowHtml).join("")}</div>`:`<div class="empty-state">Rien en cours sur cette période.</div>`}</div>`;
 
-  // Tickets récents + dernières activités (§2)
   const recent = data.slice().sort((a,b)=>Number(b.createdAt)-Number(a.createdAt)).slice(0,6);
   const recentBlock = `<div class="card"><div class="section-label">Tickets récents</div>
     ${recent.length?`<div class="ticket-list">${recent.map(rowHtml).join("")}</div>`:`<div class="empty-state">Aucun ticket sur cette période.</div>`}</div>`;
@@ -469,7 +663,7 @@ function latestActivities(data, n){
 function renderTicketsArea(){
   if(state.selectedTicketId){
     const t = getTicket(state.selectedTicketId);
-    if(t) return (isStaff()?`<button class="back-link" data-action="back">&larr; Retour</button>`:`<button class="back-link" data-action="back">&larr; Retour</button>`) + renderTicketDetail(t);
+    if(t) return `<button class="back-link" data-action="back">&larr; Retour</button>` + renderTicketDetail(t);
     state.selectedTicketId = null;
   }
   if(state.session.role==="user") return renderUserTickets();
@@ -488,7 +682,7 @@ function renderUserTickets(){
 
 function renderNewTicketForm(){
   const svcOpts = SERVICES.map(s=>`<option value="${esc(s)}" ${state.newService===s?'selected':''}>${esc(s)}</option>`).join("");
- const prioOpts = PRIORITIES.map(p=>`<option value="${esc(p)}" ${p==="Low"?"selected":""}>${esc(p)}</option>`).join("");
+  const prioOpts = PRIORITIES.map(p=>`<option value="${esc(p)}" ${p==="Low"?"selected":""}>${esc(p)}</option>`).join("");
   const isMedlogix = state.newService === "MEDLOGIX";
   let medlogixFields = "";
   if(isMedlogix){
@@ -579,7 +773,6 @@ function renderTicketDetail(t){
   }).join("");
 
   let actions = "";
-  // Standard user : commenter ses propres tickets
   if(state.session.role==="user"){
     actions = `<div class="section-label">Ajouter un commentaire</div>
       <div class="resolve-box">
@@ -608,7 +801,6 @@ function renderTicketDetail(t){
     }
   }
 
-  // Bloc priorité / affectation (admin + super)
   let staffControls = "";
   if(isStaff()){
     const prioOpts = PRIORITIES.map(p=>`<option value="${p}" ${t.priority===p?'selected':''}>${p}</option>`).join("");
@@ -690,7 +882,7 @@ function renderUsers(){
       </div>
       <div id="user-form-error"></div>
       <button class="btn" data-action="create-user">Créer l'utilisateur</button>
-      <div class="hint">Le compte est créé avec « changement de mot de passe obligatoire » à la première connexion.</div>
+      <div class="hint">Le compte est créé avec « changement de mot de passe obligatoire » à la première connexion. Pour le mur d'écran, créez « ${MONITOR_EMAIL} » en Super User.</div>
     </div>
     <div class="section-label">Comptes existants</div>${list}`;
 }
@@ -727,10 +919,15 @@ function bindEvents(){
 
 async function onAction(e){
   const el = e.currentTarget; const action = el.dataset.action;
-  const busy=(txt)=>{ el.disabled=true; if(el.textContent!==undefined && el.tagName==="BUTTON"){ el.dataset._t=el.textContent; el.textContent=txt; } };
+  const busy=(txt)=>{ el.disabled=true; if(el.tagName==="BUTTON"){ el.dataset._t=el.textContent; el.textContent=txt; } };
   const unbusy=()=>{ el.disabled=false; if(el.dataset._t) el.textContent=el.dataset._t; };
 
   if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; if(el.dataset.view==="users"){state.adminUsers=[];state.adminUsersError="";} if(el.dataset.view==="audit"){state.auditLog=[];state.auditError="";} render(); return; }
+  if(action==="mon-nav"){ state.view=el.dataset.view; render(); return; }
+  if(action==="refresh-now"){ busy("…"); try{ await refreshTickets(); state.lastSync=Date.now(); state.monStale=false; }catch(err){ state.monStale=true; } render(); return; }
+  if(action==="fullscreen"){ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(err){} return; }
+  if(action==="print-report"){ window.print(); return; }
+  if(action==="export-medlogix"){ exportCSV(t=>t.service==="MEDLOGIX","medlog_medlogix_export.csv"); return; }
   if(action==="logout"){ state.session=null; localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(SESS_KEY); state.view="dashboard"; render(); return; }
   if(action==="retry"){ state.loadError=""; state.booting=true; boot(); return; }
 
@@ -746,9 +943,9 @@ async function onAction(e){
       localStorage.setItem(SESS_KEY, JSON.stringify({email:r.email,name:r.name,role:r.role}));
       localStorage.setItem(EMAIL_KEY, email);
       state.loginError=""; state.mustChangePassword=!!r.mustChangePassword;
-      if(!state.mustChangePassword) await refreshTickets();
-      state.view="dashboard";
-      if(state.deepLinkTicket){ state.view="tickets"; state.selectedTicketId=state.deepLinkTicket; }
+      if(!state.mustChangePassword){ await refreshTickets(); state.lastSync=Date.now(); }
+      state.view = isMonitor() ? "monitor" : "dashboard";
+      if(!isMonitor() && state.deepLinkTicket){ state.view="tickets"; state.selectedTicketId=state.deepLinkTicket; }
       render();
     }catch(err){ state.loginError=err.message||String(err); render(); }
     return;
@@ -762,7 +959,9 @@ async function onAction(e){
     try{
       await apiPost({action:"changePassword", token:state.session.token, newPassword:p1});
       state.mustChangePassword=false; state.pwChangeError="";
-      await refreshTickets(); render();
+      await refreshTickets(); state.lastSync=Date.now();
+      state.view = isMonitor() ? "monitor" : "dashboard";
+      render();
     }catch(err){ state.pwChangeError=err.message||String(err); render(); }
     return;
   }
@@ -835,9 +1034,8 @@ async function onAction(e){
     return;
   }
 
-  if(action==="export-csv"){ exportCSV(); return; }
+  if(action==="export-csv"){ exportCSV(null,"medlog_tickets_export.csv"); return; }
 
-  // ---- Admin users ----
   if(action==="create-user"){
     const name=document.getElementById("nu-name").value.trim();
     const email=document.getElementById("nu-email").value.trim().toLowerCase();
@@ -880,15 +1078,16 @@ async function onAction(e){
   }
 }
 
-function exportCSV(){
+function exportCSV(filterFn, filename){
   const cols=["ID","Service","Module","Window","Priority","Subject","Requester name","Requester email","Status","Assigned","Created (local)","Days open","Last comment"];
-  const rows=tickets.map(t=>{
+  const src = filterFn ? tickets.filter(filterFn) : tickets;
+  const rows=src.map(t=>{
     const last=[...(t.history||[])].reverse().find(h=>h.type==="comment"||h.type==="status"||h.type==="reopen");
     return [t.id,t.service,t.module||"",t.window||"",t.priority,t.subject,t.requesterName,t.requesterEmail,t.status,t.assignedTo||"",new Date(Number(t.createdAt)).toLocaleString("fr-FR"),String(daysSince(t.createdAt)),last?(last.comment||(last.from+"→"+last.to)).replace(/\n/g," "):""];
   });
   const csv=[cols,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
   const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob);
-  const a=document.createElement("a"); a.href=url; a.download="medlog_tickets_export.csv"; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+  const a=document.createElement("a"); a.href=url; a.download=filename||"export.csv"; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
 }
 
 // ---- Go ----
