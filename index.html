@@ -196,7 +196,7 @@
    ========================================================================= */
 
 // ⚠ URL du Web App Apps Script déployé (se termine par /exec)
-const API_URL = "https://script.google.com/macros/s/AKfycbz_Iwcgfz57tif_Di9pTlXbJZ6gZGKdnIOIJiBxzWV0HjX_lJtViXInviplwmEmiY4h/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbziFztMKmvd8Qd_6ijtau3WZQSOnfIGWdXqvLLd5Lqa-hYXCbFffSI57mx44hFf5d53/exec";
 
 // Compte de supervision (mur d'écran). Doit être créé en SUPER USER par l'admin.
 const MONITOR_EMAIL = "view@medlog.com";
@@ -340,7 +340,7 @@ async function monRelogin(){
 }
 
 // ------------------------ Auto-refresh (monitoring) ------------------------
-let monDataTimer=null, monClockTimer=null;
+let monDataTimer=null, monClockTimer=null, staffTimer=null;
 function ensureMonitorTimers(){
   const on = isMonitor() && !state.booting && !state.mustChangePassword;
   if(on && !monDataTimer){
@@ -355,7 +355,7 @@ function ensureMonitorTimers(){
         } else { state.monStale=true; }
         render();
       }
-    }, 45000);
+    }, 10000);
   }
   if(on && !monClockTimer){
     monClockTimer = setInterval(()=>{ const c=document.getElementById("mon-clock"); if(c) c.textContent=new Date().toLocaleTimeString("fr-FR"); }, 1000);
@@ -364,6 +364,21 @@ function ensureMonitorTimers(){
     if(monDataTimer){ clearInterval(monDataTimer); monDataTimer=null; }
     if(monClockTimer){ clearInterval(monClockTimer); monClockTimer=null; }
   }
+
+  // Rafraîchissement auto des écrans de travail admin/super (toutes les 30 s),
+  // suspendu pendant la saisie pour ne pas effacer un texte en cours.
+  const staffOn = isStaff() && !state.booting && !state.mustChangePassword;
+  if(staffOn && !staffTimer){
+    staffTimer = setInterval(async ()=>{
+      if(!isStaff()){ clearInterval(staffTimer); staffTimer=null; return; }
+      const tag = (document.activeElement && document.activeElement.tagName) || "";
+      const typing = tag==="INPUT" || tag==="TEXTAREA" || tag==="SELECT";
+      const inDetailOrForm = !!state.selectedTicketId || state.reopening || state.view==="users" || state.view==="audit";
+      if(typing || inDetailOrForm) return; // on ne perturbe pas une saisie ni un formulaire ouvert
+      try{ await refreshTickets(); render(); }catch(e){ /* silencieux ; conserve l'affichage courant */ }
+    }, 30000);
+  }
+  if(!staffOn && staffTimer){ clearInterval(staffTimer); staffTimer=null; }
 }
 
 // =========================== RENDER ROOT ===========================
@@ -525,7 +540,7 @@ function renderMonitor(){
     ${kpis}
     <div class="mon-grid"><div>${mainPanel}</div><div>${sidePanel}</div></div>
     <div class="mon-foot">
-      <span>Dernière synchro : ${state.lastSync?fmtTime(state.lastSync):"—"} · actualisation automatique toutes les 45 s</span>
+      <span>Dernière synchro : ${state.lastSync?fmtTime(state.lastSync):"—"} · actualisation automatique toutes les 10 s</span>
       <span>${ml.length} tickets MEDLOGIX au total · ${ml.filter(t=>t.status==="Closed").length} clos</span>
     </div>
   </div>`;
