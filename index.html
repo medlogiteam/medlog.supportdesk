@@ -151,6 +151,18 @@
   footer.app-footer{text-align:center; font-size:11.5px; color:var(--ink-faint); padding:18px; border-top:1px solid var(--border);}
   .tz-note{font-size:11px; color:var(--ink-faint); margin-top:6px;}
 
+  /* ===== Bandeau d'annonces défilant (Phase 1) ===== */
+  .announce-banner{display:flex; align-items:stretch; background:var(--brand); color:#fff; border-radius:var(--radius); overflow:hidden; margin-bottom:18px; border:1px solid #0a3251;}
+  .announce-banner .ab-tag{display:flex; align-items:center; gap:7px; background:var(--gold); color:#3a2a0e; font-weight:800; font-size:12px; letter-spacing:.5px; text-transform:uppercase; padding:0 16px; white-space:nowrap;}
+  .announce-banner .ab-viewport{flex:1; overflow:hidden; position:relative;}
+  .announce-banner .ab-track{display:inline-flex; gap:48px; white-space:nowrap; padding:13px 0; will-change:transform; animation:ab-scroll 38s linear infinite;}
+  .announce-banner .ab-viewport:hover .ab-track{animation-play-state:paused;}
+  .announce-banner .ab-item{font-size:13.5px;}
+  .announce-banner .ab-item strong{color:#fff;}
+  .announce-banner .ab-item .ab-meta{color:#bcd3e2; font-size:11.5px; margin-left:8px;}
+  @keyframes ab-scroll{0%{transform:translateX(0);}100%{transform:translateX(-50%);}}
+  @media (prefers-reduced-motion:reduce){.announce-banner .ab-track{animation:none; white-space:normal; }}
+
   /* ===== Monitoring (mur d'écran) ===== */
   .monitor-wrap{width:100%;}
   .mon{background:#0b1322; color:#e7eef8; min-height:calc(100vh - 58px); padding:18px 22px;}
@@ -196,7 +208,7 @@
    ========================================================================= */
 
 // ⚠ URL du Web App Apps Script déployé (se termine par /exec)
-const API_URL = "https://script.google.com/macros/s/AKfycbz9pwqwUTFhedInLEJ1jTnOupHaR7tIQDe33FCkpepcpl6adUeLJyyd2JhCW4XnjCLR/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbziFztMKmvd8Qd_6ijtau3WZQSOnfIGWdXqvLLd5Lqa-hYXCbFffSI57mx44hFf5d53/exec";
 
 // Compte de supervision (mur d'écran). Doit être créé en SUPER USER par l'admin.
 const MONITOR_EMAIL = "view@medlog.com";
@@ -258,6 +270,9 @@ let state = {
   dashPeriod: "this_month", customFrom:"", customTo:"",
   adminUsers: [], adminUsersError:"",
   auditLog: [], auditError:"",
+  lookups: [], announcements: [],
+  maintSubview: "annonces", adminAnnouncements: [], adminLookups: [], maintError:"", maintLoaded:false,
+  lookupType: "service",
   deepLinkTicket: null,
   lastSync: 0, monStale: false
 };
@@ -311,9 +326,9 @@ async function boot(){
 
   render();
   if(state.session){
-    try{ await refreshTickets(); state.lastSync=Date.now(); }
+    try{ await refreshTickets(); state.lastSync=Date.now(); await loadMeta(); }
     catch(e){
-      if(await monRelogin()){ try{ await refreshTickets(); state.lastSync=Date.now(); }catch(e2){} }
+      if(await monRelogin()){ try{ await refreshTickets(); state.lastSync=Date.now(); await loadMeta(); }catch(e2){} }
       else { state.session=null; localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(SESS_KEY); }
     }
   }
@@ -323,6 +338,21 @@ async function boot(){
   render();
 }
 async function refreshTickets(){ tickets = await apiGet({ type:"tickets", token: state.session.token }); }
+async function loadMeta(){
+  try{
+    const meta = await apiGet({ type:"meta", token: state.session.token });
+    state.lookups = meta.lookups || [];
+    state.announcements = meta.announcements || [];
+  }catch(e){ /* on garde les valeurs par défaut si la lecture échoue */ }
+}
+// Listes dérivées du dictionnaire (avec repli sur les constantes si la feuille est vide).
+function lookupValues(type, fallback){
+  const rows = (state.lookups||[]).filter(l=>l.type===type && String(l.active).toUpperCase()!=="FALSE");
+  if(!rows.length) return fallback.slice();
+  return rows.sort((a,b)=>(Number(a.sort)||0)-(Number(b.sort)||0)).map(l=>l.value);
+}
+function getServices(){ return lookupValues("service", SERVICES); }
+function getPriorities(){ return lookupValues("priority", PRIORITIES); }
 
 // Reconnexion silencieuse du compte mur d'écran (fonctionnement 24/7).
 // Le jeton de session expire après 6 h ; on se reconnecte automatiquement avec
@@ -404,7 +434,7 @@ function renderHeader(){
     const role = state.session.role;
     const tabs = [["dashboard","Tableau de bord"]];
     if(role==="user") tabs.push(["tickets","Mes tickets"]); else tabs.push(["tickets","Tickets"]);
-    if(role==="admin"){ tabs.push(["users","Utilisateurs"]); tabs.push(["audit","Audit"]); }
+    if(role==="admin"){ tabs.push(["users","Utilisateurs"]); tabs.push(["maintenance","Maintenance"]); tabs.push(["audit","Audit"]); }
     nav = `<div class="topnav">${tabs.map(([v,l])=>`<button data-action="nav" data-view="${v}" class="${state.view===v?'active':''}">${l}</button>`).join("")}</div>`;
     session = `<div class="session-info"><span class="role-chip">${ROLE_LABEL[role]||role}</span>${esc(state.session.name)}<button class="link" data-action="logout">déconnexion</button></div>`;
   }
@@ -423,6 +453,7 @@ function renderMain(){
   if(state.view==="dashboard") return renderDashboard();
   if(state.view==="tickets") return renderTicketsArea();
   if(state.view==="users") return state.session.role==="admin" ? renderUsers() : renderDashboard();
+  if(state.view==="maintenance") return state.session.role==="admin" ? renderMaintenance() : renderDashboard();
   if(state.view==="audit") return state.session.role==="admin" ? renderAudit() : renderDashboard();
   return "";
 }
@@ -629,14 +660,19 @@ function renderDashboard(){
   const byService = groupCount(data, t=>t.service);
   const byPriority = groupCount(data, t=>t.priority);
   const byCreator = groupCount(data, t=>t.requesterName||t.requesterEmail);
+  const byModule = groupCount(data.filter(t=>t.service==="MEDLOGIX"), t=>t.module);
 
   const charts = `<div class="two-col">
     <div class="card"><div class="section-label">Tickets par service</div>${barList(byService)}</div>
-    <div class="card"><div class="section-label">Tickets par priorité</div>${barList(byPriority)}</div>
+    <div class="card"><div class="section-label">Tickets MEDLOGIX par module</div>${barList(byModule)}</div>
   </div>
   <div class="two-col">
+    <div class="card"><div class="section-label">Tickets par priorité</div>${barList(byPriority)}</div>
     <div class="card"><div class="section-label">Tickets par créateur</div>${barList(byCreator)}</div>
+  </div>
+  <div class="two-col">
     <div class="card"><div class="section-label">Tendance mensuelle (12 mois)</div>${monthlyTrend(data)}</div>
+    <div class="card"><div class="section-label">Tickets par statut</div>${barList(groupCount(data, t=>t.status))}</div>
   </div>`;
 
   const active = data.filter(t=>t.status==="In Progress"||t.status==="Testing"||t.status==="Reopened")
@@ -653,12 +689,23 @@ function renderDashboard(){
 
   return `<h1 class="page-title">Tableau de bord</h1>
     <p class="page-sub">Vue d'ensemble du Support Desk IT.</p>
+    ${announcementBanner()}
     <div class="filters"><div class="field" style="margin-bottom:0;"><label>Période</label>${periodSelect}</div>${customRange}</div>
     ${kpis}
     ${activeBlock}
     ${charts}
     <div class="two-col">${recentBlock}${activityBlock}</div>
     <div class="tz-note">Heures affichées dans votre fuseau : ${esc(localTZ())}.</div>`;
+}
+
+// Bandeau d'annonces défilant (Phase 1) — affiché en tête du tableau de bord.
+function announcementBanner(){
+  const list = (state.announcements||[]).filter(a=>String(a.active).toUpperCase()!=="FALSE");
+  if(!list.length) return "";
+  const item = a=>`<span class="ab-item"><strong>${esc(a.title)}</strong>${a.body?(" — "+esc(a.body)):""}<span class="ab-meta">${esc(a.author||"")}${a.publish_date?(" · "+new Date(Number(a.publish_date)).toLocaleDateString("fr-FR")):""}</span></span>`;
+  const seq = list.map(item).join("");
+  // doublé pour un défilement continu et fluide
+  return `<div class="announce-banner"><div class="ab-tag">📢 Infos</div><div class="ab-viewport"><div class="ab-track">${seq}${seq}</div></div></div>`;
 }
 
 function avgResolution(data){
@@ -722,8 +769,8 @@ function renderUserTickets(){
 }
 
 function renderNewTicketForm(){
-  const svcOpts = SERVICES.map(s=>`<option value="${esc(s)}" ${state.newService===s?'selected':''}>${esc(s)}</option>`).join("");
-  const prioOpts = PRIORITIES.map(p=>`<option value="${esc(p)}" ${p==="Low"?"selected":""}>${esc(p)}</option>`).join("");
+  const svcOpts = getServices().map(s=>`<option value="${esc(s)}" ${state.newService===s?'selected':''}>${esc(s)}</option>`).join("");
+  const prioOpts = getPriorities().map(p=>`<option value="${esc(p)}" ${p==="Low"?"selected":""}>${esc(p)}</option>`).join("");
   const isMedlogix = state.newService === "MEDLOGIX";
   let medlogixFields = "";
   if(isMedlogix){
@@ -757,8 +804,8 @@ function onModuleChange(){
 function renderStaffTickets(){
   const f = state.filter;
   const statusOpts = ["all",...STATUSES].map(s=>`<option value="${s}" ${f.status===s?'selected':''}>${s==='all'?'Tous statuts':s}</option>`).join("");
-  const svcOpts = ["all",...SERVICES].map(s=>`<option value="${esc(s)}" ${f.service===s?'selected':''}>${s==='all'?'Tous services':esc(s)}</option>`).join("");
-  const prioOpts = ["all",...PRIORITIES].map(p=>`<option value="${esc(p)}" ${f.priority===p?'selected':''}>${p==='all'?'Toutes priorités':esc(p)}</option>`).join("");
+  const svcOpts = ["all",...getServices()].map(s=>`<option value="${esc(s)}" ${f.service===s?'selected':''}>${s==='all'?'Tous services':esc(s)}</option>`).join("");
+  const prioOpts = ["all",...getPriorities()].map(p=>`<option value="${esc(p)}" ${f.priority===p?'selected':''}>${p==='all'?'Toutes priorités':esc(p)}</option>`).join("");
   let list = tickets.slice();
   if(f.status!=="all") list=list.filter(t=>t.status===f.status);
   if(f.service!=="all") list=list.filter(t=>t.service===f.service);
@@ -844,7 +891,7 @@ function renderTicketDetail(t){
 
   let staffControls = "";
   if(isStaff()){
-    const prioOpts = PRIORITIES.map(p=>`<option value="${p}" ${t.priority===p?'selected':''}>${p}</option>`).join("");
+    const prioOpts = getPriorities().map(p=>`<option value="${p}" ${t.priority===p?'selected':''}>${p}</option>`).join("");
     staffControls = `<div class="two-col" style="margin-bottom:20px;">
       <div class="card"><div class="section-label">Priorité</div>
         <div class="btn-row"><select id="prio-select" style="max-width:200px;">${prioOpts}</select>
@@ -928,6 +975,86 @@ function renderUsers(){
     <div class="section-label">Comptes existants</div>${list}`;
 }
 
+// =========================== MAINTENANCE (admin) — Phase 1 ===========================
+function loadMaint(){
+  Promise.all([
+    apiGet({type:"announcements", token:state.session.token}),
+    apiGet({type:"lookups", token:state.session.token})
+  ]).then(([an,lk])=>{ state.adminAnnouncements=an; state.adminLookups=lk; state.maintLoaded=true; render(); })
+   .catch(e=>{ state.maintError=e.message||String(e); state.maintLoaded=true; render(); });
+}
+function renderMaintenance(){
+  if(!state.maintLoaded && !state.maintError){ loadMaint(); }
+  const sub = `<div class="subnav">
+    <button data-action="maint-subview" data-view="annonces" class="${state.maintSubview==='annonces'?'active':''}">Annonces</button>
+    <button data-action="maint-subview" data-view="dictionnaire" class="${state.maintSubview==='dictionnaire'?'active':''}">Dictionnaire de données</button>
+  </div>`;
+  let body;
+  if(state.maintError) body=`<div class="error-msg">${esc(state.maintError)}</div>`;
+  else if(!state.maintLoaded) body=`<div class="empty-state">Chargement…</div>`;
+  else body = state.maintSubview==="dictionnaire" ? maintDictionnaire() : maintAnnonces();
+  return `<h1 class="page-title">Maintenance</h1>
+    <p class="page-sub">Centre d'administration : annonces du tableau de bord et listes configurables.</p>
+    ${sub}${body}`;
+}
+
+function maintAnnonces(){
+  const list = state.adminAnnouncements||[];
+  const rows = list.map(a=>{
+    const active = String(a.active).toUpperCase()!=="FALSE";
+    return `<div class="ticket-row" style="cursor:default;border-left-color:${active?'var(--brand-2)':'var(--ink-faint)'};">
+      <div class="col-main"><div class="subject">${esc(a.title)} ${active?'<span class="badge closed">Active</span>':'<span class="badge priority-Medium">Inactive</span>'}</div>
+        <div class="meta"><span>${esc(a.body||"")}</span></div>
+        <div class="meta"><span class="ticket-id">${esc(a.author||"")}</span><span>${a.publish_date?new Date(Number(a.publish_date)).toLocaleDateString("fr-FR"):""}</span><span class="badge svc">${esc(a.category||"Général")}</span></div>
+      </div>
+      <div class="col-status" style="align-items:flex-end;gap:6px;"><div class="btn-row">
+        <button class="btn tiny secondary" data-action="toggle-announcement" data-id="${esc(a.id)}" data-active="${active?'0':'1'}">${active?'Désactiver':'Activer'}</button>
+        <button class="btn tiny danger" data-action="del-announcement" data-id="${esc(a.id)}">Supprimer</button>
+      </div></div></div>`;
+  }).join("");
+  return `<div class="card" style="margin-bottom:20px;">
+      <div class="section-label">Publier une annonce</div>
+      <div class="field"><label for="an-title">Titre</label><input type="text" id="an-title" placeholder="Ex : Maintenance MEDLOGIX samedi"></div>
+      <div class="field"><label for="an-body">Texte (peut être long)</label><textarea id="an-body" placeholder="Message diffusé à tous sur le tableau de bord."></textarea></div>
+      <div class="field-row">
+        <div class="field"><label for="an-cat">Catégorie</label><input type="text" id="an-cat" placeholder="Général / Maintenance / Sécurité…" value="Général"></div>
+        <div class="field" style="display:flex;align-items:center;gap:8px;margin-top:24px;"><input type="checkbox" id="an-scroll" checked style="width:auto;"> <label for="an-scroll" style="margin:0;">Faire défiler dans le bandeau</label></div>
+      </div>
+      <div id="an-error"></div>
+      <button class="btn" data-action="create-announcement">Publier</button>
+      <div class="hint">Les annonces actives apparaissent dans le bandeau défilant en tête du tableau de bord.</div>
+    </div>
+    <div class="section-label">Annonces existantes</div>
+    ${list.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucune annonce.</div>`}`;
+}
+
+function maintDictionnaire(){
+  const types = [["service","Services"],["priority","Priorités"]];
+  const typeBtns = types.map(([v,l])=>`<button class="btn tiny ${state.lookupType===v?'':'secondary'}" data-action="lookup-type" data-type="${v}">${l}</button>`).join(" ");
+  const items = (state.adminLookups||[]).filter(l=>l.type===state.lookupType).sort((a,b)=>(Number(a.sort)||0)-(Number(b.sort)||0));
+  const rows = items.map(l=>{
+    const active = String(l.active).toUpperCase()!=="FALSE";
+    return `<div class="ticket-row" style="cursor:default;border-left-color:${active?'var(--brand-2)':'var(--ink-faint)'};">
+      <div class="col-main"><div class="subject">${esc(l.value)} ${active?"":'<span class="badge priority-Medium">Inactive</span>'}</div></div>
+      <div class="col-status" style="align-items:flex-end;gap:6px;"><div class="btn-row">
+        <button class="btn tiny secondary" data-action="toggle-lookup" data-id="${esc(l.id)}" data-active="${active?'0':'1'}">${active?'Désactiver':'Activer'}</button>
+        <button class="btn tiny danger" data-action="del-lookup" data-id="${esc(l.id)}">Supprimer</button>
+      </div></div></div>`;
+  }).join("");
+  return `<div class="card" style="margin-bottom:16px;"><div class="section-label">Liste à gérer</div>
+      <div class="btn-row">${typeBtns}</div>
+      <div class="hint">Les statuts du workflow (Pending → In Progress → Testing → Closed / Reopened) restent fixes : ce sont des étapes de processus, pas une simple liste.</div>
+    </div>
+    <div class="card" style="margin-bottom:20px;">
+      <div class="section-label">Ajouter une valeur</div>
+      <div class="btn-row"><input type="text" id="lk-value" placeholder="Nouvelle valeur" style="max-width:380px;">
+      <button class="btn" data-action="create-lookup">Ajouter</button></div>
+      <div id="lk-error"></div>
+    </div>
+    <div class="section-label">Valeurs existantes — ${state.lookupType==='service'?'Services':'Priorités'}</div>
+    ${items.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucune valeur.</div>`}`;
+}
+
 // =========================== AUDIT (admin) ===========================
 function renderAudit(){
   if(!state.auditLog.length && !state.auditError){
@@ -963,7 +1090,7 @@ async function onAction(e){
   const busy=(txt)=>{ el.disabled=true; if(el.tagName==="BUTTON"){ el.dataset._t=el.textContent; el.textContent=txt; } };
   const unbusy=()=>{ el.disabled=false; if(el.dataset._t) el.textContent=el.dataset._t; };
 
-  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; if(el.dataset.view==="users"){state.adminUsers=[];state.adminUsersError="";} if(el.dataset.view==="audit"){state.auditLog=[];state.auditError="";} render(); return; }
+  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; if(el.dataset.view==="users"){state.adminUsers=[];state.adminUsersError="";} if(el.dataset.view==="audit"){state.auditLog=[];state.auditError="";} if(el.dataset.view==="maintenance"){state.maintLoaded=false;state.maintError="";} render(); return; }
   if(action==="mon-nav"){ state.view=el.dataset.view; render(); return; }
   if(action==="refresh-now"){ busy("…"); try{ await refreshTickets(); state.lastSync=Date.now(); state.monStale=false; }catch(err){ state.monStale=true; } render(); return; }
   if(action==="fullscreen"){ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(err){} return; }
@@ -985,7 +1112,7 @@ async function onAction(e){
       localStorage.setItem(EMAIL_KEY, email);
       if(isMonitor()){ try{ localStorage.setItem(MON_CREDS_KEY, JSON.stringify({email, password})); }catch(e){} }
       state.loginError=""; state.mustChangePassword=!!r.mustChangePassword;
-      if(!state.mustChangePassword){ await refreshTickets(); state.lastSync=Date.now(); }
+      if(!state.mustChangePassword){ await refreshTickets(); state.lastSync=Date.now(); await loadMeta(); }
       state.view = isMonitor() ? "monitor" : "dashboard";
       if(!isMonitor() && state.deepLinkTicket){ state.view="tickets"; state.selectedTicketId=state.deepLinkTicket; }
       render();
@@ -1001,7 +1128,7 @@ async function onAction(e){
     try{
       await apiPost({action:"changePassword", token:state.session.token, newPassword:p1});
       state.mustChangePassword=false; state.pwChangeError="";
-      await refreshTickets(); state.lastSync=Date.now();
+      await refreshTickets(); state.lastSync=Date.now(); await loadMeta();
       state.view = isMonitor() ? "monitor" : "dashboard";
       render();
     }catch(err){ state.pwChangeError=err.message||String(err); render(); }
@@ -1077,6 +1204,68 @@ async function onAction(e){
   }
 
   if(action==="export-csv"){ exportCSV(null,"medlog_tickets_export.csv"); return; }
+
+  // ---- Maintenance : annonces & dictionnaire ----
+  if(action==="maint-subview"){ state.maintSubview=el.dataset.view; render(); return; }
+  if(action==="lookup-type"){ state.lookupType=el.dataset.type; render(); return; }
+
+  if(action==="create-announcement"){
+    const title=document.getElementById("an-title").value.trim();
+    const body=document.getElementById("an-body").value.trim();
+    const category=document.getElementById("an-cat").value.trim()||"Général";
+    const scroll=document.getElementById("an-scroll").checked;
+    const errBox=document.getElementById("an-error");
+    if(!title){ errBox.innerHTML=`<div class="error-msg">Le titre est obligatoire.</div>`; return; }
+    busy("Publication…");
+    try{ await apiPost({action:"createAnnouncement", token:state.session.token, title, body, category, scroll});
+      state.adminAnnouncements=await apiGet({type:"announcements", token:state.session.token}); await loadMeta(); render(); }
+    catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); }
+    return;
+  }
+  if(action==="toggle-announcement"){
+    const id=el.dataset.id, active=el.dataset.active==="1";
+    busy("…");
+    try{ await apiPost({action:"updateAnnouncement", token:state.session.token, id, fields:{active}});
+      state.adminAnnouncements=await apiGet({type:"announcements", token:state.session.token}); await loadMeta(); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="del-announcement"){
+    const id=el.dataset.id;
+    if(!confirm("Supprimer cette annonce ?")) return;
+    busy("…");
+    try{ await apiPost({action:"deleteAnnouncement", token:state.session.token, id});
+      state.adminAnnouncements=await apiGet({type:"announcements", token:state.session.token}); await loadMeta(); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="create-lookup"){
+    const value=document.getElementById("lk-value").value.trim();
+    const errBox=document.getElementById("lk-error");
+    if(!value){ errBox.innerHTML=`<div class="error-msg">Saisissez une valeur.</div>`; return; }
+    busy("Ajout…");
+    try{ await apiPost({action:"createLookup", token:state.session.token, type:state.lookupType, value, label:value, sort:(state.adminLookups||[]).filter(l=>l.type===state.lookupType).length+1});
+      state.adminLookups=await apiGet({type:"lookups", token:state.session.token}); await loadMeta(); render(); }
+    catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); }
+    return;
+  }
+  if(action==="toggle-lookup"){
+    const id=el.dataset.id, active=el.dataset.active==="1";
+    busy("…");
+    try{ await apiPost({action:"updateLookup", token:state.session.token, id, fields:{active}});
+      state.adminLookups=await apiGet({type:"lookups", token:state.session.token}); await loadMeta(); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="del-lookup"){
+    const id=el.dataset.id;
+    if(!confirm("Supprimer cette valeur ?")) return;
+    busy("…");
+    try{ await apiPost({action:"deleteLookup", token:state.session.token, id});
+      state.adminLookups=await apiGet({type:"lookups", token:state.session.token}); await loadMeta(); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
 
   if(action==="create-user"){
     const name=document.getElementById("nu-name").value.trim();
