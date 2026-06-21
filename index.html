@@ -591,12 +591,12 @@ async function reloadAssets(){
   state.assets=data||[];
 }
 async function loadAssetMovements(id){
-  const { data } = await sb.from("asset_movements")
-    .select("*, actor:actor_id(full_name), to_user:to_user_id(full_name), from_user:from_user_id(full_name)")
-    .eq("asset_id",id).order("created_at",{ascending:false});
+  const { data, error } = await sb.from("asset_movements").select("*").eq("asset_id",id).order("created_at",{ascending:false});
+  if(error){ console.error("movements:", error.message); }
   state.assetMovements=data||[];
   if(state.selectedAssetId===id) render();
 }
+function userName(id){ if(!id) return "—"; const p=state.profilesList.find(x=>x.id===id); return p?(p.full_name||p.email):"—"; }
 
 function renderAssetsArea(){
   if(!state.assetsLoaded){ loadAssets(); return `<div class="empty-state">Chargement du registre…</div>`; }
@@ -665,12 +665,12 @@ function renderAssetForm(){
 
 function movementRow(m){
   let txt="";
-  if(m.type==="assignment") txt=`Affecté à <strong>${esc(m.to_user?m.to_user.full_name:"—")}</strong>`;
-  else if(m.type==="return") txt=`Retour en stock${m.from_user?(" (depuis "+esc(m.from_user.full_name)+")"):""}`;
+  if(m.type==="assignment") txt=`Affecté à <strong>${esc(userName(m.to_user_id))}</strong>`;
+  else if(m.type==="return") txt=`Retour en stock${m.from_user_id?(" (depuis "+esc(userName(m.from_user_id))+")"):""}`;
   else if(m.type==="status_change") txt=`Statut : <strong>${esc(assetStatusLabel(m.from_status))}</strong> → <strong>${esc(assetStatusLabel(m.to_status))}</strong>`;
   else if(m.type==="transfer") txt=`Transfert de site`;
   else txt=esc(m.note||m.type);
-  return `<div class="thread-item"><div class="t-head"><span class="who">${esc(m.actor?m.actor.full_name:"—")}</span><span>${fmtDate(m.created_at)}</span></div><div class="t-body">${txt}${m.note?` <span style="color:var(--ink-soft);">— ${esc(m.note)}</span>`:""}</div></div>`;
+  return `<div class="thread-item"><div class="t-head"><span class="who">${esc(userName(m.actor_id))}</span><span>${fmtDate(m.created_at)}</span></div><div class="t-body">${txt}${m.note?` <span style="color:var(--ink-soft);">— ${esc(m.note)}</span>`:""}</div></div>`;
 }
 function renderAssetDetail(a){
   const editable=canEditAssets();
