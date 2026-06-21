@@ -198,7 +198,8 @@ let state = {
   assets:[], assetCats:[], assetsLoaded:false, assetFilter:{cat:"all", status:"all", search:""},
   selectedAssetId:null, assetNew:false, assetMovements:[], profilesList:[],
   stockItems:[], stockLoaded:false, stockSubview:"inventory", stockSearch:"", stockMoves:[], locations:[], locationsLoaded:false,
-  selectedStockId:null, stockNew:false
+  selectedStockId:null, stockNew:false,
+  prs:[], prLoaded:false, prItems:[], selectedPrId:null, prNew:false, prDraftItems:[], departments:[]
 };
 
 // --- Utilitaires ---
@@ -217,6 +218,8 @@ function canViewAssets(){ return ["admin","it_manager","technician","asset_manag
 function canEditAssets(){ return ["admin","asset_manager"].includes(roleName()); }
 function canViewStock(){ return ["admin","it_manager","asset_manager","store_keeper"].includes(roleName()); }
 function canMoveStock(){ return ["admin","asset_manager","store_keeper"].includes(roleName()); }
+function canViewProcurement(){ return ["admin","it_manager","buyer"].includes(roleName()); }
+function canCreatePr(){ return ["admin","it_manager","buyer"].includes(roleName()); }
 function canCreate(){ return roleName() && roleName()!=="viewer"; }
 function uid(){ return state.session ? state.session.user.id : null; }
 function myName(){ return state.profile ? (state.profile.full_name||state.profile.email) : ""; }
@@ -344,6 +347,7 @@ function renderHeader(){
     tabs.push(["tickets", r==="user"?"Mes tickets":"Tickets"]);
     if(canViewAssets()) tabs.push(["assets","Actifs"]);
     if(canViewStock()) tabs.push(["stock","Stock"]);
+    if(canViewProcurement()) tabs.push(["procurement","Achats"]);
     if(isAdmin()){ tabs.push(["users","Utilisateurs"]); tabs.push(["maintenance","Maintenance"]); }
     nav=`<div class="topnav">${tabs.map(([v,l])=>`<button data-action="nav" data-view="${v}" class="${state.view===v?'active':''}">${l}</button>`).join("")}</div>`;
     session=`<div class="session-info"><span class="role-chip">${ROLE_LABEL[r]||r}</span>${esc(myName())}<button class="link" data-action="logout">déconnexion</button></div>`;
@@ -359,6 +363,7 @@ function renderMain(){
   if(state.view==="tickets") return renderTicketsArea();
   if(state.view==="assets") return canViewAssets()?renderAssetsArea():renderDashboard();
   if(state.view==="stock") return canViewStock()?renderStockArea():renderDashboard();
+  if(state.view==="procurement") return canViewProcurement()?renderProcurementArea():renderDashboard();
   if(state.view==="users") return isAdmin()?renderUsers():renderDashboard();
   if(state.view==="maintenance") return isAdmin()?renderMaintenance():renderDashboard();
   return "";
@@ -829,6 +834,93 @@ function renderStockDetail(it){
 }
 function onStockTypeChange(){ const t=document.getElementById("sm-type").value; const w=document.getElementById("sm-loc-wrap"); if(w) w.style.display = t==="transfer"?"block":"none"; }
 
+// =========================== ACHATS (Phase 3 — demandes) ===========================
+function prStatusBadge(s){
+  const map={"open":"pending","ordered":"progress","received":"closed","cancelled":"reopened"};
+  const lbl={"open":"Ouverte","ordered":"Commandée","received":"Reçue","cancelled":"Annulée"};
+  return `<span class="badge ${map[s]||'pending'}">${esc(lbl[s]||s)}</span>`;
+}
+async function loadProcurement(){
+  try{
+    const [reqs, deps] = await Promise.all([
+      sb.from("purchase_requests").select("*, requester:requester_id(full_name), department:department_id(name), location:location_id(name)").order("created_at",{ascending:false}),
+      sb.from("departments").select("*").eq("is_active",true).order("name")
+    ]);
+    state.prs=reqs.data||[]; state.departments=deps.data||[]; state.prLoaded=true;
+    if(!state.locations.length){ const {data}=await sb.from("locations").select("*").eq("is_active",true).order("name"); state.locations=data||[]; }
+    render();
+  }catch(e){ state.prs=[]; state.prLoaded=true; render(); }
+}
+async function reloadPr(){
+  const { data } = await sb.from("purchase_requests").select("*, requester:requester_id(full_name), department:department_id(name), location:location_id(name)").order("created_at",{ascending:false});
+  state.prs=data||[];
+}
+async function loadPrItems(id){
+  const { data } = await sb.from("purchase_request_items").select("*").eq("request_id",id).order("id");
+  state.prItems=data||[];
+  if(state.selectedPrId===id) render();
+}
+
+function renderProcurementArea(){
+  if(!state.prLoaded){ loadProcurement(); return `<div class="empty-state">Chargement des achats…</div>`; }
+  if(state.selectedPrId){ const r=state.prs.find(x=>x.id===state.selectedPrId); if(r) return `<button class="back-link" data-action="pr-back">&larr; Retour</button>`+renderPrDetail(r); state.selectedPrId=null; }
+  if(state.prNew && canCreatePr()) return `<button class="back-link" data-action="pr-cancel">&larr; Retour à la liste</button>`+renderPrForm();
+  return renderPrList();
+}
+function renderPrList(){
+  const newBtn=canCreatePr()?`<button class="btn secondary" data-action="pr-new">+ Nouvelle demande</button>`:"";
+  const rows=state.prs.map(r=>`<div class="ticket-row" data-action="open-pr" data-id="${r.id}">
+    <div class="col-main"><div class="subject">${esc(r.justification||"(sans objet)")} <span class="ticket-id">${esc(r.request_no||"")}</span></div>
+      <div class="meta"><span>${esc(r.requester?r.requester.full_name:"")}</span>${r.location?`<span>${esc(r.location.name)}</span>`:""}<span>${fmtDate(r.created_at)}</span>${r.estimated_cost!=null?`<span>≈ ${esc(r.estimated_cost)}</span>`:""}</div></div>
+    <div class="col-status">${r.priority?`<span class="badge priority-${r.priority}">${esc(r.priority)}</span>`:""}${prStatusBadge(r.status)}</div></div>`).join("");
+  return `<h1 class="page-title">Demandes d'achat</h1><p class="page-sub">${state.prs.length} demande(s).</p>
+    <div class="filters">${newBtn}</div>
+    ${state.prs.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucune demande d'achat.</div>`}`;
+}
+function renderPrForm(){
+  const locOpts=`<option value="">— site —</option>`+state.locations.map(l=>`<option value="${l.id}">${esc(l.name)}</option>`).join("");
+  const depOpts=`<option value="">— service —</option>`+(state.departments||[]).map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join("");
+  const prioOpts=getPriorities().map(p=>`<option value="${esc(p)}" ${p==="Medium"?"selected":""}>${esc(p)}</option>`).join("");
+  const items=(state.prDraftItems||[]);
+  const itemRows=items.map((it,i)=>`<div class="ticket-row" style="cursor:default;"><div class="col-main"><div class="subject">${esc(it.description)}</div><div class="meta"><span>Qté : ${esc(it.qty)}</span>${it.unit_cost?`<span>PU : ${esc(it.unit_cost)}</span>`:""}</div></div><div class="col-status"><button class="btn tiny danger" data-action="pr-item-del" data-idx="${i}">Retirer</button></div></div>`).join("");
+  const total=items.reduce((s,it)=>s+(Number(it.qty)||0)*(Number(it.unit_cost)||0),0);
+  return `<h1 class="page-title">Nouvelle demande d'achat</h1><p class="page-sub">Décrivez le besoin et les articles souhaités.</p>
+    <div class="card" style="margin-bottom:18px;">
+      <div class="field"><label for="pr-just">Objet / justification</label><textarea id="pr-just" placeholder="Pourquoi cet achat est nécessaire."></textarea></div>
+      <div class="field-row">
+        <div class="field"><label for="pr-dep">Service</label><select id="pr-dep">${depOpts}</select></div>
+        <div class="field"><label for="pr-loc">Site</label><select id="pr-loc">${locOpts}</select></div>
+      </div>
+      <div class="field" style="max-width:260px;"><label for="pr-prio">Priorité</label><select id="pr-prio">${prioOpts}</select></div>
+    </div>
+    <div class="card" style="margin-bottom:18px;">
+      <div class="section-label">Articles demandés</div>
+      <div class="field-row">
+        <div class="field"><label for="pi-desc">Désignation</label><input type="text" id="pi-desc" placeholder="ex : Ordinateur portable"></div>
+        <div class="field"><label for="pi-qty">Quantité</label><input type="text" id="pi-qty" placeholder="1"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="pi-cost">Prix unitaire estimé (optionnel)</label><input type="text" id="pi-cost" placeholder="0"></div>
+        <div class="field" style="display:flex;align-items:flex-end;"><button class="btn secondary" data-action="pr-item-add">Ajouter l'article</button></div>
+      </div>
+      ${items.length?`<div class="ticket-list" style="margin-top:10px;">${itemRows}</div><div style="text-align:right;margin-top:10px;font-size:13.5px;"><strong>Total estimé : ${total.toLocaleString("fr-FR")}</strong></div>`:`<div class="empty-state">Aucun article ajouté.</div>`}
+    </div>
+    <div id="pr-error"></div>
+    <button class="btn" data-action="submit-pr">Enregistrer la demande</button>`;
+}
+function renderPrDetail(r){
+  const items=(state.prItems||[]);
+  const total=items.reduce((s,it)=>s+(Number(it.qty)||0)*(Number(it.unit_cost)||0),0);
+  const itemRows=items.map(it=>`<tr><td>${esc(it.description)}</td><td style="text-align:right;font-family:var(--mono);">${esc(it.qty)}</td><td style="text-align:right;font-family:var(--mono);">${it.unit_cost!=null?esc(it.unit_cost):"—"}</td><td style="text-align:right;font-family:var(--mono);">${((Number(it.qty)||0)*(Number(it.unit_cost)||0)).toLocaleString("fr-FR")}</td></tr>`).join("");
+  return `<div class="detail-header"><div><span class="ticket-id">${esc(r.request_no||"")}</span><h2>${esc(r.justification||"(sans objet)")}</h2>
+      <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;"><span>Demandeur : ${esc(r.requester?r.requester.full_name:"")}</span>${r.department?`<span>${esc(r.department.name)}</span>`:""}${r.location?`<span>${esc(r.location.name)}</span>`:""}<span>Créée le ${fmtDate(r.created_at)}</span></div></div>
+      <div style="display:flex;gap:8px;align-items:center;">${r.priority?`<span class="badge priority-${r.priority}">${esc(r.priority)}</span>`:""}${prStatusBadge(r.status)}</div></div>
+    <div class="card"><div class="section-label">Articles demandés</div>
+      ${items.length?`<table style="width:100%;border-collapse:collapse;font-size:13.5px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid var(--border);">Désignation</th><th style="text-align:right;padding:8px;border-bottom:1px solid var(--border);">Qté</th><th style="text-align:right;padding:8px;border-bottom:1px solid var(--border);">PU</th><th style="text-align:right;padding:8px;border-bottom:1px solid var(--border);">Total</th></tr></thead><tbody>${itemRows}</tbody></table><div style="text-align:right;margin-top:10px;font-size:14px;"><strong>Total estimé : ${total.toLocaleString("fr-FR")}</strong></div>`:`<div class="empty-state">Aucun article.</div>`}
+    </div>
+    <div class="hint" style="margin-top:14px;">La conversion en commande puis la réception (entrée en stock) arriveront dans les tranches suivantes de la Phase 3.</div>`;
+}
+
 // =========================== MAINTENANCE (admin) ===========================
 function renderMaintenance(){
   const sub=`<div class="subnav">
@@ -992,7 +1084,7 @@ async function onAction(e){
   const busy=t=>{ el.disabled=true; if(el.tagName==="BUTTON"){ el.dataset._t=el.textContent; el.textContent=t; } };
   const unbusy=()=>{ el.disabled=false; if(el.dataset._t) el.textContent=el.dataset._t; };
 
-  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; state.staffNew=false; state.selectedAssetId=null; state.assetNew=false; state.selectedStockId=null; state.stockNew=false; if(el.dataset.view==="users"){state.usersLoaded=false;} if(el.dataset.view==="assets"){state.assetsLoaded=false;} if(el.dataset.view==="stock"){state.stockLoaded=false;} if(el.dataset.view==="maintenance"){state.locationsLoaded=false;} render(); return; }
+  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; state.staffNew=false; state.selectedAssetId=null; state.assetNew=false; state.selectedStockId=null; state.stockNew=false; state.selectedPrId=null; state.prNew=false; state.prDraftItems=[]; if(el.dataset.view==="users"){state.usersLoaded=false;} if(el.dataset.view==="assets"){state.assetsLoaded=false;} if(el.dataset.view==="stock"){state.stockLoaded=false;} if(el.dataset.view==="procurement"){state.prLoaded=false;} if(el.dataset.view==="maintenance"){state.locationsLoaded=false;} render(); return; }
   if(action==="mon-nav"){ state.view=el.dataset.view; render(); return; }
   if(action==="refresh-now"){ busy("…"); try{ await reloadTickets(); state.lastSync=Date.now(); }catch(e){} render(); return; }
   if(action==="fullscreen"){ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(e){} return; }
@@ -1121,6 +1213,37 @@ async function onAction(e){
       await sb.from("asset_movements").insert({ asset_id:id, type:"return", from_user_id:cur.assigned_user_id||null, from_status:cur.status, to_status:"In Stock", actor_id:uid() });
       await reloadAssets(); await loadAssetMovements(id); render();
     }catch(err){ alert(err.message||String(err)); unbusy(); } return;
+  }
+
+  // ---- Achats (Phase 3) ----
+  if(action==="pr-new"){ state.prNew=true; state.selectedPrId=null; state.prDraftItems=[]; render(); return; }
+  if(action==="pr-cancel"){ state.prNew=false; state.prDraftItems=[]; render(); return; }
+  if(action==="open-pr"){ state.selectedPrId=el.dataset.id; state.prItems=[]; render(); await loadPrItems(el.dataset.id); return; }
+  if(action==="pr-back"){ state.selectedPrId=null; render(); return; }
+  if(action==="pr-item-add"){
+    const desc=document.getElementById("pi-desc").value.trim();
+    const qty=parseInt(document.getElementById("pi-qty").value||"0",10);
+    const unit_cost=document.getElementById("pi-cost").value.trim()?Number(document.getElementById("pi-cost").value):null;
+    if(!desc||!qty||qty<1){ document.getElementById("pr-error").innerHTML=`<div class="error-msg">Désignation et quantité (≥1) requises pour ajouter un article.</div>`; return; }
+    state.prDraftItems.push({ description:desc, qty, unit_cost }); render(); return;
+  }
+  if(action==="pr-item-del"){ state.prDraftItems.splice(Number(el.dataset.idx),1); render(); return; }
+  if(action==="submit-pr"){
+    const justification=document.getElementById("pr-just").value.trim();
+    const department_id=document.getElementById("pr-dep").value||null;
+    const location_id=document.getElementById("pr-loc").value||null;
+    const priority=document.getElementById("pr-prio").value;
+    const errBox=document.getElementById("pr-error");
+    if(!justification){ errBox.innerHTML=`<div class="error-msg">L'objet de la demande est obligatoire.</div>`; return; }
+    if(!state.prDraftItems.length){ errBox.innerHTML=`<div class="error-msg">Ajoutez au moins un article.</div>`; return; }
+    const estimated_cost=state.prDraftItems.reduce((s,it)=>s+(Number(it.qty)||0)*(Number(it.unit_cost)||0),0)||null;
+    busy("Enregistrement…");
+    const { data:ins, error } = await sb.from("purchase_requests").insert({ justification, department_id, location_id, priority, requester_id:uid(), status:"open", estimated_cost }).select().single();
+    if(error){ errBox.innerHTML=`<div class="error-msg">${esc(error.message)}</div>`; unbusy(); return; }
+    const itemsPayload=state.prDraftItems.map(it=>({ request_id:ins.id, description:it.description, qty:it.qty, unit_cost:it.unit_cost }));
+    const { error:e2 } = await sb.from("purchase_request_items").insert(itemsPayload);
+    if(e2){ errBox.innerHTML=`<div class="error-msg">Demande créée mais erreur sur les articles : ${esc(e2.message)}</div>`; }
+    await reloadPr(); state.prNew=false; state.prDraftItems=[]; render(); return;
   }
 
   // ---- Stock (Phase 2) ----
