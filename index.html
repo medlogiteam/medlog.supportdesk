@@ -309,7 +309,8 @@ function renderHeader(){
   if(state.profile && isMonitor()){
     nav=`<div class="topnav">
       <button data-action="mon-nav" data-view="monitor" class="${state.view==='monitor'?'active':''}">Monitoring</button>
-      <button data-action="mon-nav" data-view="report" class="${state.view==='report'?'active':''}">Rapport</button></div>`;
+      <button data-action="mon-nav" data-view="report" class="${state.view==='report'?'active':''}">Rapport</button>
+      <button data-action="mon-nav" data-view="announces" class="${state.view==='announces'?'active':''}">Annonces</button></div>`;
     session=`<div class="session-info"><span id="mon-clock" class="role-chip" style="font-family:var(--mono);">${new Date().toLocaleTimeString("fr-FR")}</span>
       <button class="link" data-action="refresh-now">actualiser</button>
       <button class="link" data-action="fullscreen">plein écran</button>
@@ -328,7 +329,7 @@ function renderMain(){
   if(state.booting) return `<div class="gate"><h1>Chargement…</h1><p>Connexion à la base sécurisée.</p></div>`;
   if(!state.session || !state.profile) return renderLogin();
   if(state.loadError) return `<div class="gate"><h1>Erreur de chargement</h1><div class="card"><div class="error-msg">${esc(state.loadError)}</div><button class="btn" data-action="retry" style="margin-top:12px;">Réessayer</button></div></div>`;
-  if(isMonitor()) return state.view==="report" ? renderReport() : renderMonitor();
+  if(isMonitor()) return state.view==="report" ? renderReport() : state.view==="announces" ? renderMonitorAnnonces() : renderMonitor();
   if(state.view==="dashboard") return renderDashboard();
   if(state.view==="tickets") return renderTicketsArea();
   if(state.view==="users") return isAdmin()?renderUsers():renderDashboard();
@@ -349,8 +350,10 @@ function renderLogin(){
 }
 
 // =========================== DASHBOARD ===========================
-function announcementBanner(){
-  const list=state.announcements; if(!list.length) return "";
+function announcementsForUser(){ return state.announcements.filter(a=>a.audience==="all"||a.audience==="both"||!a.audience); }
+function announcementsForViewer(){ return state.announcements.filter(a=>a.audience==="viewer"||a.audience==="both"); }
+function announcementBanner(list){
+  if(!list||!list.length) return "";
   const item=a=>`<span class="ab-item"><strong>${esc(a.title)}</strong>${a.body?(" — "+esc(a.body)):""}<span class="ab-meta">${esc(a.author?a.author.full_name:"")}${a.publish_date?(" · "+new Date(a.publish_date).toLocaleDateString("fr-FR")):""}</span></span>`;
   const seq=list.map(item).join("");
   return `<div class="announce-banner"><div class="ab-tag">📢 Infos</div><div class="ab-viewport"><div class="ab-track">${seq}${seq}</div></div></div>`;
@@ -382,7 +385,7 @@ function renderDashboard(){
   const recent=data.slice(0,6);
   const recentBlock=`<div class="card"><div class="section-label">Tickets récents</div>${recent.length?`<div class="ticket-list">${recent.map(rowHtml).join("")}</div>`:`<div class="empty-state">Aucun ticket.</div>`}</div>`;
   return `<h1 class="page-title">Tableau de bord</h1><p class="page-sub">Vue d'ensemble du Support Desk IT.</p>
-    ${announcementBanner()}
+    ${announcementBanner(announcementsForUser())}
     <div class="filters"><div class="field" style="margin-bottom:0;"><label>Période</label>${periodSelect}</div>${customRange}</div>
     ${kpis}${activeBlock}${charts}${recentBlock}`;
 }
@@ -557,14 +560,23 @@ function renderMaintenance(){
 }
 function maintAnnonces(){
   const list=state.announcements;
+  const audLabel=a=>({all:"Utilisateurs",viewer:"Mur d'écran",both:"Tous + écran"}[a.audience]||"Utilisateurs");
   const rows=list.map(a=>`<div class="ticket-row" style="cursor:default;border-left-color:var(--brand-2);">
-      <div class="col-main"><div class="subject">${esc(a.title)} <span class="badge closed">Active</span></div><div class="meta"><span>${esc(a.body||"")}</span></div><div class="meta"><span class="ticket-id">${esc(a.author?a.author.full_name:"")}</span><span>${a.publish_date?new Date(a.publish_date).toLocaleDateString("fr-FR"):""}</span></div></div>
+      <div class="col-main"><div class="subject">${esc(a.title)} <span class="badge closed">Active</span> <span class="badge svc">${audLabel(a)}</span></div><div class="meta"><span>${esc(a.body||"")}</span></div><div class="meta"><span class="ticket-id">${esc(a.author?a.author.full_name:"")}</span><span>${a.publish_date?new Date(a.publish_date).toLocaleDateString("fr-FR"):""}</span></div></div>
       <div class="col-status"><div class="btn-row"><button class="btn tiny secondary" data-action="toggle-announcement" data-id="${a.id}">Désactiver</button><button class="btn tiny danger" data-action="del-announcement" data-id="${a.id}">Supprimer</button></div></div></div>`).join("");
   return `<div class="card" style="margin-bottom:20px;"><div class="section-label">Publier une annonce</div>
       <div class="field"><label for="an-title">Titre</label><input type="text" id="an-title" placeholder="Ex : Maintenance MEDLOGIX samedi"></div>
-      <div class="field"><label for="an-body">Texte</label><textarea id="an-body" placeholder="Message diffusé à tous."></textarea></div>
-      <div class="field"><label for="an-cat">Catégorie</label><input type="text" id="an-cat" value="Général"></div>
-      <div id="an-error"></div><button class="btn" data-action="create-announcement">Publier</button></div>
+      <div class="field"><label for="an-body">Texte</label><textarea id="an-body" placeholder="Message diffusé."></textarea></div>
+      <div class="field-row">
+        <div class="field"><label for="an-cat">Catégorie</label><input type="text" id="an-cat" value="Général"></div>
+        <div class="field"><label for="an-audience">Audience</label><select id="an-audience">
+          <option value="all">Tous les utilisateurs</option>
+          <option value="viewer">Mur d'écran uniquement</option>
+          <option value="both">Les deux</option>
+        </select></div>
+      </div>
+      <div id="an-error"></div><button class="btn" data-action="create-announcement">Publier</button>
+      <div class="hint">L'audience décide où l'annonce apparaît : tableau de bord des utilisateurs, bandeau du mur d'écran, ou les deux.</div></div>
     <div class="section-label">Annonces actives</div>${list.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucune annonce active.</div>`}`;
 }
 function maintDictionnaire(){
@@ -611,7 +623,14 @@ function renderMonitor(){
   const others=(()=>{const m={};state.tickets.filter(t=>t.service!=="MEDLOGIX"&&t.status!=="Closed").forEach(t=>{m[t.service]=(m[t.service]||0)+1;});return Object.keys(m).map(k=>({label:k,count:m[k]}));})();
   const othersTotal=others.reduce((a,b)=>a+b.count,0);
   const sidePanel=`<div class="mon-panel"><h3>Répartition par statut (MEDLOGIX)</h3>${monBars(byStatus)}</div><div class="mon-panel"><h3>Par module (ouverts)</h3>${monBars(byModule)}</div><div class="mon-panel"><h3>Autres services (non prioritaires) — ${othersTotal} ouverts</h3><div class="mon-other">${others.length?others.map(o=>`<span class="chip">${esc(o.label.split(" (")[0])} : ${o.count}</span>`).join(""):'<span style="color:#7e93b3;font-size:12.5px;">Aucun</span>'}</div></div>`;
-  return `<div class="mon"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px;flex-wrap:wrap;gap:8px;"><div style="font-size:20px;font-weight:800;">Monitoring MEDLOGIX — avancement des tâches</div><div style="font-size:12px;color:#7e93b3;">Supervision en lecture seule</div></div>${kpis}<div class="mon-grid"><div>${mainPanel}</div><div>${sidePanel}</div></div><div class="mon-foot"><span>Dernière synchro : ${state.lastSync?new Date(state.lastSync).toLocaleTimeString("fr-FR"):"—"} · actualisation automatique toutes les 10 s</span><span>${ml.length} tickets MEDLOGIX au total · ${ml.filter(t=>t.status==="Closed").length} clos</span></div></div>`;
+  return `<div class="mon"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px;flex-wrap:wrap;gap:8px;"><div style="font-size:20px;font-weight:800;">Monitoring MEDLOGIX — avancement des tâches</div><div style="font-size:12px;color:#7e93b3;">Supervision en lecture seule</div></div>${announcementBanner(announcementsForViewer())}${kpis}<div class="mon-grid"><div>${mainPanel}</div><div>${sidePanel}</div></div><div class="mon-foot"><span>Dernière synchro : ${state.lastSync?new Date(state.lastSync).toLocaleTimeString("fr-FR"):"—"} · actualisation automatique toutes les 10 s</span><span>${ml.length} tickets MEDLOGIX au total · ${ml.filter(t=>t.status==="Closed").length} clos</span></div></div>`;
+}
+
+// Onglet Annonces du mur d'écran : liste en lecture seule des annonces ciblant l'écran.
+function renderMonitorAnnonces(){
+  const list=announcementsForViewer();
+  const rows=list.map(a=>`<div class="mon-panel"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;"><div style="font-weight:700;font-size:15px;color:#fff;">${esc(a.title)}</div><div style="font-size:12px;color:#7e93b3;">${esc(a.author?a.author.full_name:"")}${a.publish_date?(" · "+new Date(a.publish_date).toLocaleDateString("fr-FR")):""}</div></div>${a.body?`<div style="margin-top:8px;font-size:14px;color:#d7e2f0;line-height:1.5;white-space:pre-wrap;">${esc(a.body)}</div>`:""}</div>`).join("");
+  return `<div class="mon"><div style="font-size:20px;font-weight:800;margin-bottom:14px;">Annonces de mise à jour</div>${list.length?rows:`<div class="mon-panel" style="text-align:center;color:#7e93b3;">Aucune annonce active pour le mur d'écran.</div>`}<div class="mon-foot"><span>Annonces publiées par l'administrateur · affichage en lecture seule</span></div></div>`;
 }
 
 // =========================== RAPPORT ===========================
@@ -745,10 +764,11 @@ async function onAction(e){
     const title=document.getElementById("an-title").value.trim();
     const body=document.getElementById("an-body").value.trim();
     const category=document.getElementById("an-cat").value.trim()||"Général";
+    const audience=document.getElementById("an-audience").value;
     const errBox=document.getElementById("an-error");
     if(!title){ errBox.innerHTML=`<div class="error-msg">Titre obligatoire.</div>`; return; }
     busy("Publication…");
-    const { error } = await sb.from("announcements").insert({ title, body, category, author_id:uid(), is_active:true, scroll:true });
+    const { error } = await sb.from("announcements").insert({ title, body, category, audience, author_id:uid(), is_active:true, scroll:true });
     if(error){ errBox.innerHTML=`<div class="error-msg">${esc(error.message)}</div>`; unbusy(); return; }
     state.announcements=await fetchAnnouncements(); render(); return;
   }
