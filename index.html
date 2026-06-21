@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MEDLOG Support Desk — Tickets</title>
+<title>MEDLOG IT Ops — Support Desk</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root{
     --bg:#EEF1F4; --surface:#FFF; --surface-2:#F6F8FA; --ink:#0F1B2D; --ink-soft:#54657A; --ink-faint:#8A99AC;
@@ -18,59 +19,47 @@
   body{background:var(--bg); color:var(--ink); font-family:var(--sans); -webkit-font-smoothing:antialiased;}
   button,input,select,textarea{font-family:inherit;}
   :focus-visible{outline:2px solid var(--brand-2); outline-offset:2px;}
-  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;}}
-
   #app{min-height:100vh; display:flex; flex-direction:column;}
   header.topbar{background:var(--brand); color:#fff; padding:12px 24px; display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; border-bottom:3px solid var(--gold);}
   .brand{display:flex; align-items:center; gap:10px;}
   .brand .mark{width:34px; height:34px; border-radius:7px; background:var(--brand-2); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px;}
   .brand .name{font-weight:700; font-size:16px;}
   .brand .sub{font-size:11px; color:#C9D8E3; letter-spacing:1.1px; text-transform:uppercase; margin-top:1px;}
-  .topnav{display:flex; gap:6px; background:rgba(255,255,255,0.08); padding:4px; border-radius:8px;}
+  .topnav{display:flex; gap:6px; background:rgba(255,255,255,0.08); padding:4px; border-radius:8px; flex-wrap:wrap;}
   .topnav button{border:none; background:transparent; color:#D9E4EC; padding:8px 15px; border-radius:6px; font-size:13px; font-weight:600; cursor:pointer;}
   .topnav button.active{background:#fff; color:var(--brand);}
   .session-info{font-size:12px; color:#C9D8E3; display:flex; align-items:center; gap:10px;}
   .session-info .role-chip{background:rgba(255,255,255,0.16); padding:2px 8px; border-radius:20px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.4px;}
   .session-info button.link{background:none; border:none; color:#fff; text-decoration:underline; cursor:pointer; font-size:12px; padding:0;}
-
   main{flex:1; padding:24px; max-width:1180px; margin:0 auto; width:100%;}
   .card{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:20px;}
   h1.page-title{font-size:20px; margin:0 0 4px; color:var(--brand);}
   p.page-sub{font-size:13px; color:var(--ink-soft); margin:0 0 22px;}
   .section-label{font-size:12px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.6px; margin:0 0 10px;}
-
   .stat-row{display:grid; grid-template-columns:repeat(6,1fr); gap:12px; margin-bottom:18px;}
   @media (max-width:980px){.stat-row{grid-template-columns:repeat(3,1fr);}}
   @media (max-width:560px){.stat-row{grid-template-columns:repeat(2,1fr);}}
   .stat{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:13px 15px;}
   .stat .n{font-family:var(--mono); font-size:22px; font-weight:700; color:var(--brand);}
   .stat .l{font-size:11px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.5px; margin-top:2px;}
-  .stat.alert .n{color:var(--critical);}
-  .stat.accent .n{color:var(--brand-2);}
-
+  .stat.alert .n{color:var(--critical);} .stat.accent .n{color:var(--brand-2);}
   .two-col{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:18px;}
   @media (max-width:820px){.two-col{grid-template-columns:1fr;}}
-
   label{display:block; font-size:12.5px; font-weight:600; color:var(--ink-soft); margin-bottom:5px;}
-  input[type=text],input[type=password],input[type=date],select,textarea{width:100%; padding:10px 11px; border:1px solid var(--border); border-radius:7px; font-size:13.5px; color:var(--ink); background:#fff;}
+  input[type=text],input[type=password],input[type=email],input[type=date],select,textarea{width:100%; padding:10px 11px; border:1px solid var(--border); border-radius:7px; font-size:13.5px; color:var(--ink); background:#fff;}
   textarea{resize:vertical; min-height:84px;}
   .field{margin-bottom:16px;} .field-row{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
   @media (max-width:640px){.field-row{grid-template-columns:1fr;}}
-
   .btn{display:inline-flex; align-items:center; gap:6px; background:var(--brand); color:#fff; border:none; padding:10px 18px; border-radius:7px; font-size:13.5px; font-weight:600; cursor:pointer;}
   .btn:hover{background:#0a3251;}
   .btn.secondary{background:#fff; color:var(--brand); border:1px solid var(--border);}
-  .btn.secondary:hover{background:var(--surface-2);}
   .btn.danger{background:#fff; color:var(--critical); border:1px solid #F3C9C9;}
-  .btn.danger:hover{background:#FDEEEE;}
   .btn.tiny{padding:6px 11px; font-size:12px;}
   .btn:disabled{opacity:.5; cursor:not-allowed;}
   .btn-row{display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
-
   .subnav{display:flex; gap:18px; margin-bottom:18px; border-bottom:1px solid var(--border);}
   .subnav button{background:none; border:none; padding:10px 2px; font-size:13.5px; font-weight:600; color:var(--ink-soft); cursor:pointer; border-bottom:2px solid transparent; position:relative; top:1px;}
   .subnav button.active{color:var(--brand); border-bottom-color:var(--brand-2);}
-
   .badge{display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:700; padding:4px 9px; border-radius:20px; white-space:nowrap;}
   .badge.pending{background:var(--pending-bg); color:var(--pending);}
   .badge.progress{background:var(--progress-bg); color:var(--progress);}
@@ -83,7 +72,6 @@
   .badge.priority-Low{background:#EFF1F4; color:var(--ink-faint);}
   .badge.overdue{background:#FBE1E1; color:var(--critical);}
   .badge.svc{background:var(--brand-soft); color:var(--brand);}
-
   .ticket-id{font-family:var(--mono); font-size:12px; color:var(--ink-soft);}
   .filters{display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px; align-items:flex-end;}
   .filters .field{margin-bottom:0; min-width:150px;} .filters .search{flex:1; min-width:200px;}
@@ -100,20 +88,12 @@
   .ticket-row .meta{font-size:12px; color:var(--ink-soft); display:flex; gap:10px; flex-wrap:wrap;}
   .ticket-row .col-status{display:flex; flex-direction:column; align-items:flex-end; gap:6px;}
   .empty-state{text-align:center; padding:46px 20px; color:var(--ink-soft); font-size:13.5px; border:1px dashed var(--border); border-radius:var(--radius); background:var(--surface-2);}
-
   .bars{display:flex; flex-direction:column; gap:9px;}
   .bar-row{display:flex; align-items:center; gap:10px;}
   .bar-row .b-label{font-size:12.5px; color:var(--ink-soft); width:230px; flex-shrink:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   .bar-row .b-track{flex:1; height:8px; background:var(--surface-2); border-radius:6px; overflow:hidden;}
   .bar-row .b-fill{height:100%; background:var(--brand-2); border-radius:6px;}
   .bar-row .b-count{font-family:var(--mono); font-size:12px; width:26px; text-align:right;}
-
-  .trend{display:flex; align-items:flex-end; gap:8px; height:120px; padding-top:8px;}
-  .trend .t-col{flex:1; display:flex; flex-direction:column; align-items:center; gap:6px; justify-content:flex-end;}
-  .trend .t-bar{width:60%; background:var(--brand); border-radius:4px 4px 0 0; min-height:2px;}
-  .trend .t-lbl{font-size:10.5px; color:var(--ink-faint);}
-  .trend .t-val{font-size:11px; font-family:var(--mono); color:var(--ink-soft);}
-
   .detail-header{display:flex; justify-content:space-between; align-items:flex-start; gap:14px; margin-bottom:14px; flex-wrap:wrap;}
   .detail-header h2{font-size:17px; margin:2px 0 6px;}
   .back-link{background:none; border:none; color:var(--brand-2); font-size:13px; font-weight:600; cursor:pointer; padding:0; margin-bottom:14px;}
@@ -136,11 +116,6 @@
   .thread-item .t-body{font-size:13.5px; line-height:1.5; white-space:pre-wrap;}
   .resolve-box{border:1px solid var(--border); border-radius:9px; padding:16px; background:var(--surface-2);}
   .reopen-banner{background:var(--reopened-bg); color:var(--reopened); border:1px solid #F3C2D8; border-radius:8px; padding:10px 14px; font-size:12.5px; font-weight:600; margin-bottom:16px;}
-
-  table.audit{width:100%; border-collapse:collapse; font-size:12.5px;}
-  table.audit th,table.audit td{text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top;}
-  table.audit th{font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--ink-soft);}
-
   .gate{max-width:420px; margin:54px auto; text-align:center;}
   .gate h1{font-size:19px; color:var(--brand); margin-bottom:6px;}
   .gate p{font-size:13px; color:var(--ink-soft); margin-bottom:22px;}
@@ -149,52 +124,15 @@
   .ok-msg{background:var(--closed-bg); color:var(--closed); border-radius:7px; padding:9px 12px; font-size:12.5px; margin-top:10px;}
   .hint{font-size:11.5px; color:var(--ink-faint); margin-top:8px;}
   footer.app-footer{text-align:center; font-size:11.5px; color:var(--ink-faint); padding:18px; border-top:1px solid var(--border);}
-  .tz-note{font-size:11px; color:var(--ink-faint); margin-top:6px;}
-
-  /* ===== Bandeau d'annonces défilant (Phase 1) ===== */
   .announce-banner{display:flex; align-items:stretch; background:var(--brand); color:#fff; border-radius:var(--radius); overflow:hidden; margin-bottom:18px; border:1px solid #0a3251;}
   .announce-banner .ab-tag{display:flex; align-items:center; gap:7px; background:var(--gold); color:#3a2a0e; font-weight:800; font-size:12px; letter-spacing:.5px; text-transform:uppercase; padding:0 16px; white-space:nowrap;}
   .announce-banner .ab-viewport{flex:1; overflow:hidden; position:relative;}
-  .announce-banner .ab-track{display:inline-flex; gap:48px; white-space:nowrap; padding:13px 0; will-change:transform; animation:ab-scroll 38s linear infinite;}
+  .announce-banner .ab-track{display:inline-flex; gap:48px; white-space:nowrap; padding:13px 0; animation:ab-scroll 38s linear infinite;}
   .announce-banner .ab-viewport:hover .ab-track{animation-play-state:paused;}
   .announce-banner .ab-item{font-size:13.5px;}
-  .announce-banner .ab-item strong{color:#fff;}
   .announce-banner .ab-item .ab-meta{color:#bcd3e2; font-size:11.5px; margin-left:8px;}
   @keyframes ab-scroll{0%{transform:translateX(0);}100%{transform:translateX(-50%);}}
-  @media (prefers-reduced-motion:reduce){.announce-banner .ab-track{animation:none; white-space:normal; }}
-
-  /* ===== Monitoring (mur d'écran) ===== */
-  .monitor-wrap{width:100%;}
-  .mon{background:#0b1322; color:#e7eef8; min-height:calc(100vh - 58px); padding:18px 22px;}
-  .mon-kpis{display:grid; grid-template-columns:repeat(6,1fr); gap:12px; margin-bottom:16px;}
-  @media (max-width:980px){.mon-kpis{grid-template-columns:repeat(3,1fr);}}
-  .mon-kpi{background:#131f33; border:1px solid #20304a; border-radius:12px; padding:16px 18px;}
-  .mon-kpi .n{font-family:var(--mono); font-size:36px; font-weight:800; line-height:1; color:#fff;}
-  .mon-kpi .l{font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:#90a4c2; margin-top:7px;}
-  .mon-kpi.amber .n{color:#ffb454;} .mon-kpi.blue .n{color:#5ca8ff;} .mon-kpi.violet .n{color:#b794f6;} .mon-kpi.pink .n{color:#f06fa6;} .mon-kpi.red .n{color:#ff6b6b;} .mon-kpi.green .n{color:#5cd6a0;}
-  .mon-grid{display:grid; grid-template-columns:2fr 1fr; gap:16px;}
-  @media (max-width:980px){.mon-grid{grid-template-columns:1fr;}}
-  .mon-panel{background:#101b2e; border:1px solid #20304a; border-radius:12px; padding:14px 16px; margin-bottom:16px;}
-  .mon-panel h3{font-size:12px; text-transform:uppercase; letter-spacing:.7px; color:#9fb3d1; margin:0 0 12px;}
-  table.mon-table{width:100%; border-collapse:collapse;}
-  table.mon-table th{font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:#7e93b3; text-align:left; padding:6px 8px; border-bottom:1px solid #21304a;}
-  table.mon-table td{padding:10px 8px; border-bottom:1px solid #182539; font-size:14px; color:#d7e2f0; vertical-align:middle;}
-  .mon-id{font-family:var(--mono); font-size:12px; color:#8fb4e6;}
-  .mon-subj{font-weight:600;}
-  .mon-age{font-family:var(--mono); font-size:13px;}
-  .mon-age.over{color:#ff6b6b; font-weight:700;}
-  .mon-foot{display:flex; justify-content:space-between; color:#7e93b3; font-size:12px; margin-top:6px; flex-wrap:wrap; gap:8px;}
-  .mon-stale{background:#3a1f1f; color:#ff9b9b; border:1px solid #5a2a2a; border-radius:8px; padding:8px 12px; font-size:12.5px; margin-bottom:12px;}
-  .mon-other{display:flex; gap:8px; flex-wrap:wrap;}
-  .mon-other .chip{background:#16233a; border:1px solid #223150; border-radius:20px; padding:5px 11px; font-size:12px; color:#b9cae3;}
-
-  /* ===== Impression du rapport ===== */
-  @media print{
-    header.topbar, .no-print{display:none!important;}
-    body{background:#fff;}
-    main{max-width:none; padding:0;}
-    .card{break-inside:avoid;}
-  }
+  @media (prefers-reduced-motion:reduce){.announce-banner .ab-track{animation:none; white-space:normal;}}
 </style>
 </head>
 <body>
@@ -202,879 +140,396 @@
 
 <script>
 /* =========================================================================
-   MEDLOG Support Desk — client (hébergeable sur GitHub Pages)
-   Backend : Google Apps Script. RBAC côté serveur.
-   + Mode Monitoring / Rapport pour le compte view@medlog.com (lecture seule).
+   MEDLOG IT Ops — Frontend Phase 1 (Supabase)
+   Auth: Supabase Auth · Données: PostgreSQL via supabase-js · Sécurité: RLS
    ========================================================================= */
 
-// ⚠ URL du Web App Apps Script déployé (se termine par /exec)
-const API_URL = "https://script.google.com/macros/s/AKfycbziFztMKmvd8Qd_6ijtau3WZQSOnfIGWdXqvLLd5Lqa-hYXCbFffSI57mx44hFf5d53/exec";
+// --- Connexion Supabase (clé anon/publishable = publique, protégée par la RLS) ---
+const SB_URL = "https://awdaxjpijvegkjrgcjqk.supabase.co";
+const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF3ZGF4anBpanZlZ2tqcmdjanFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE5OTAwMzUsImV4cCI6MjA5NzU2NjAzNX0.wHDI1JTaWs4MJmIhBy4ePu6P-rfPBta-5jiP34LfSko";
+const sb = supabase.createClient(SB_URL, SB_KEY);
 
-// Compte de supervision (mur d'écran). Doit être créé en SUPER USER par l'admin.
-const MONITOR_EMAIL = "view@medlog.com";
-
-const SERVICES = [
-  "MEDLOGIX",
-  "Access Rights and Passwords",
-  "Business Telephony",
-  "Internet (Wi-Fi, Network, Performance, etc.)",
-  "IT Equipment & Devices Procurement",
-  "MSC Global Citrix Platform and Global Applications (TMS, SAP, Cognos, etc.)",
-  "Office 365 (Outlook, Excel, Teams, SharePoint, etc.)",
-  "Printing and Scanning",
-  "Workstation (PC, Monitor, Accessories, Software, etc.)"
-];
-// Module → écrans (uniquement quand SERVICE = MEDLOGIX). Corrigez librement.
+// --- Référentiels de repli (le dictionnaire en base prime) ---
+const SERVICES_FALLBACK = ["MEDLOGIX","Access Rights and Passwords","Business Telephony","Internet (Wi-Fi, Network, Performance, etc.)","IT Equipment & Devices Procurement","MSC Global Citrix Platform and Global Applications (TMS, SAP, Cognos, etc.)","Office 365 (Outlook, Excel, Teams, SharePoint, etc.)","Printing and Scanning","Workstation (PC, Monitor, Accessories, Software, etc.)"];
+const PRIORITIES_FALLBACK = ["Critical","High","Medium","Low"];
 const MODULE_TREE = {
   "Freight Management": ["Quotation","Job","Trip Tracking","Payment Request","Supplier Invoice","Customer Invoice / Credit Note","General Service Charge","Charge Item","Charge Template","Event","Freight Job Query","Freight Quotation Query","Customer Invoice Query","Query – Sale & Cost Sheet","Contact","Debtors Credit Limit","Supplier"],
   "Arrivela": ["Job Planning","Vehicle Servicing Costs","Resource Unavailability","Trip Report","Vehicle Servicing Costs Report","Trip Tracking Report"],
   "Dashboard": ["Quotations Dashboard","Job Dashboard","Event Dashboard","Vehicle Dashboard","User Management","Revenue by Clients Report","HAD Report"]
 };
-const PRIORITIES = ["Critical","High","Medium","Low"];
 const STATUSES = ["Pending","In Progress","Testing","Closed","Reopened"];
 const SLA_DAYS = 2;
-const ROLE_LABEL = { admin:"Admin", super:"Super User", user:"Utilisateur" };
+const ROLE_LABEL = { admin:"Admin", it_manager:"IT Manager", technician:"Technicien", asset_manager:"Gest. parc", store_keeper:"Magasinier", buyer:"Acheteur", project_manager:"Chef projet", approver:"Approbateur", user:"Utilisateur", viewer:"Lecture seule" };
 
-const TOKEN_KEY = "medlog_token", SESS_KEY = "medlog_session", EMAIL_KEY = "medlog_email";
-const MON_CREDS_KEY = "medlog_mon_creds"; // identifiants du compte mur d'écran, pour reconnexion auto 24/7
-
-// ------------------------ API layer ------------------------
-async function apiGet(params){
-  const qs = Object.keys(params||{}).map(k=>k+"="+encodeURIComponent(params[k])).join("&");
-  const res = await fetch(API_URL + (qs?("?"+qs):""), { method:"GET" });
-  if(!res.ok) throw new Error("HTTP " + res.status);
-  const data = await res.json();
-  if(data && data.error) throw new Error(data.error);
-  return data;
-}
-async function apiPost(body){
-  const res = await fetch(API_URL, { method:"POST", body: JSON.stringify(body) });
-  const data = await res.json();
-  if(data && data.error) throw new Error(data.error);
-  return data;
-}
-
-// ------------------------ State ------------------------
-let tickets = [];
+// --- État ---
 let state = {
-  booting: true,
-  loadError: "",
-  view: "dashboard",            // dashboard | tickets | users | audit | monitor | report
-  session: null,
-  loginError: "", loginEmailPrefill: localStorage.getItem(EMAIL_KEY) || "",
-  mustChangePassword: false, pwChangeError:"", pwChangeOk:false,
-  userSubview: "new",
-  selectedTicketId: null, reopening:false,
-  newService: SERVICES[0],
-  filter: { status:"all", service:"all", priority:"all", search:"" },
-  dashPeriod: "this_month", customFrom:"", customTo:"",
-  adminUsers: [], adminUsersError:"",
-  auditLog: [], auditError:"",
-  lookups: [], announcements: [],
-  maintSubview: "annonces", adminAnnouncements: [], adminLookups: [], maintError:"", maintLoaded:false,
-  lookupType: "service",
-  deepLinkTicket: null,
-  lastSync: 0, monStale: false
+  booting:true, session:null, profile:null, loadError:"",
+  view:"dashboard", loginError:"",
+  tickets:[], lookups:[], announcements:[], roles:[],
+  selectedTicketId:null, ticketActivity:[], reopening:false,
+  newService:"", filter:{status:"all", service:"all", priority:"all", search:""},
+  dashPeriod:"this_month", customFrom:"", customTo:"",
+  maintSubview:"annonces", lookupType:"service",
+  adminUsers:[], usersLoaded:false
 };
 
-// ------------------------ Utilities ------------------------
+// --- Utilitaires ---
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
-function fmtDate(ts){ const d=new Date(Number(ts)); return d.toLocaleDateString("fr-FR",{day:"2-digit",month:"short",year:"numeric"})+" · "+d.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"}); }
-function fmtTime(ts){ return new Date(Number(ts)).toLocaleTimeString("fr-FR"); }
-function localTZ(){ try{ return Intl.DateTimeFormat().resolvedOptions().timeZone; }catch(e){ return "local"; } }
-function daysSince(ts){ return Math.floor((Date.now()-Number(ts))/86400000); }
-function isOverdue(t){ return t.status!=="Closed" && daysSince(t.createdAt) >= SLA_DAYS; }
+function fmtDate(v){ const d=new Date(v); return isNaN(d)?"—":(d.toLocaleDateString("fr-FR",{day:"2-digit",month:"short",year:"numeric"})+" · "+d.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})); }
+function daysSince(v){ return Math.floor((Date.now()-new Date(v).getTime())/86400000); }
+function isOverdue(t){ return t.status!=="Closed" && daysSince(t.created_at) >= SLA_DAYS; }
 function statusClass(s){ return {"Pending":"pending","In Progress":"progress","Testing":"testing","Closed":"closed","Reopened":"reopened"}[s]||"pending"; }
 function statusRowClass(s){ return "status-"+String(s).replace(/\s+/g,"-"); }
 function priorityRank(p){ return {"Critical":0,"High":1,"Medium":2,"Low":3}[p] ?? 4; }
 function statusRank(s){ return {"Reopened":0,"Pending":1,"In Progress":2,"Testing":3,"Closed":4}[s] ?? 5; }
-function getTicket(id){ return tickets.find(t=>t.id===id); }
-function isStaff(){ return state.session && (state.session.role==="admin"||state.session.role==="super"); }
-function isMonitor(){ return state.session && String(state.session.email).toLowerCase() === MONITOR_EMAIL; }
-function medlogixTickets(){ return tickets.filter(t=>t.service==="MEDLOGIX"); }
+function roleName(){ return state.profile && state.profile.role ? state.profile.role.name : (state.profile?state.profile.role_name:null); }
+function isAdmin(){ return roleName()==="admin"; }
+function isStaff(){ return ["admin","it_manager","technician"].includes(roleName()); }
+function canCreate(){ return roleName() && roleName()!=="viewer"; }
+function uid(){ return state.session ? state.session.user.id : null; }
+function myName(){ return state.profile ? (state.profile.full_name||state.profile.email) : ""; }
+function getTicket(id){ return state.tickets.find(t=>t.id===id); }
+function lkVals(type, fb){ const r=state.lookups.filter(l=>l.type===type); return r.length ? r.sort((a,b)=>(a.sort_order||0)-(b.sort_order||0)).map(l=>l.value) : fb.slice(); }
+function getServices(){ return lkVals("service", SERVICES_FALLBACK); }
+function getPriorities(){ return lkVals("priority", PRIORITIES_FALLBACK); }
 
 function periodRange(){
-  const now = new Date();
-  const out = { from:0, to:Date.now()+1 };
-  const startOfDay = d=>{ const x=new Date(d); x.setHours(0,0,0,0); return x.getTime(); };
-  const endOfDay = d=>{ const x=new Date(d); x.setHours(23,59,59,999); return x.getTime(); };
+  const now=new Date(); const out={from:0,to:Date.now()+1};
+  const sod=d=>{const x=new Date(d);x.setHours(0,0,0,0);return x.getTime();};
+  const eod=d=>{const x=new Date(d);x.setHours(23,59,59,999);return x.getTime();};
   switch(state.dashPeriod){
-    case "today": out.from=startOfDay(now); out.to=endOfDay(now); break;
-    case "yesterday": { const y=new Date(now); y.setDate(y.getDate()-1); out.from=startOfDay(y); out.to=endOfDay(y); break; }
-    case "last7": { const s=new Date(now); s.setDate(s.getDate()-6); out.from=startOfDay(s); out.to=endOfDay(now); break; }
-    case "this_month": out.from=new Date(now.getFullYear(),now.getMonth(),1).getTime(); out.to=endOfDay(now); break;
+    case "today": out.from=sod(now); out.to=eod(now); break;
+    case "yesterday": { const y=new Date(now); y.setDate(y.getDate()-1); out.from=sod(y); out.to=eod(y); break; }
+    case "last7": { const s=new Date(now); s.setDate(s.getDate()-6); out.from=sod(s); out.to=eod(now); break; }
+    case "this_month": out.from=new Date(now.getFullYear(),now.getMonth(),1).getTime(); out.to=eod(now); break;
     case "prev_month": out.from=new Date(now.getFullYear(),now.getMonth()-1,1).getTime(); out.to=new Date(now.getFullYear(),now.getMonth(),0,23,59,59,999).getTime(); break;
-    case "this_year": out.from=new Date(now.getFullYear(),0,1).getTime(); out.to=endOfDay(now); break;
-    case "custom": out.from = state.customFrom?startOfDay(new Date(state.customFrom)):0; out.to = state.customTo?endOfDay(new Date(state.customTo)):Date.now()+1; break;
-    default: break;
+    case "this_year": out.from=new Date(now.getFullYear(),0,1).getTime(); out.to=eod(now); break;
+    case "custom": out.from=state.customFrom?sod(new Date(state.customFrom)):0; out.to=state.customTo?eod(new Date(state.customTo)):Date.now()+1; break;
   }
   return out;
 }
-function inPeriod(t){ const r=periodRange(); return Number(t.createdAt)>=r.from && Number(t.createdAt)<=r.to; }
+function inPeriod(t){ const r=periodRange(); const ms=new Date(t.created_at).getTime(); return ms>=r.from && ms<=r.to; }
 
-function render(){ document.getElementById("app").innerHTML = renderApp(); bindEvents(); ensureMonitorTimers(); }
+function render(){ document.getElementById("app").innerHTML = renderApp(); bindEvents(); }
 
-// ------------------------ Boot ------------------------
-async function boot(){
+// --- Boot / Auth ---
+async function init(){
+  const { data:{ session } } = await sb.auth.getSession();
+  if(session){ state.session=session; await afterLogin(); }
+  else { state.booting=false; render(); }
+  sb.auth.onAuthStateChange((event, sess)=>{
+    if(event==="SIGNED_OUT"){ state.session=null; state.profile=null; render(); }
+  });
+}
+async function afterLogin(){
   try{
-    const sess = JSON.parse(localStorage.getItem(SESS_KEY)||"null");
-    const token = localStorage.getItem(TOKEN_KEY);
-    if(sess && token){ state.session = Object.assign({}, sess, { token }); }
-  }catch(e){}
-  const m = (location.hash||"").match(/ticket=([^&]+)/);
-  if(m) state.deepLinkTicket = decodeURIComponent(m[1]);
-
-  render();
-  if(state.session){
-    try{ await refreshTickets(); state.lastSync=Date.now(); await loadMeta(); }
-    catch(e){
-      if(await monRelogin()){ try{ await refreshTickets(); state.lastSync=Date.now(); await loadMeta(); }catch(e2){} }
-      else { state.session=null; localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(SESS_KEY); }
-    }
-  }
-  state.booting = false;
-  if(state.session && isMonitor()){ state.view = "monitor"; }
-  else if(state.deepLinkTicket && state.session){ state.view="tickets"; state.selectedTicketId = state.deepLinkTicket; }
+    await loadProfile();
+    await loadData();
+    state.loadError="";
+  }catch(e){ state.loadError = e.message||String(e); }
+  state.booting=false;
+  state.view = roleName()==="viewer" ? "dashboard" : "dashboard";
   render();
 }
-async function refreshTickets(){ tickets = await apiGet({ type:"tickets", token: state.session.token }); }
-async function loadMeta(){
-  try{
-    const meta = await apiGet({ type:"meta", token: state.session.token });
-    state.lookups = meta.lookups || [];
-    state.announcements = meta.announcements || [];
-  }catch(e){ /* on garde les valeurs par défaut si la lecture échoue */ }
+async function loadProfile(){
+  const { data, error } = await sb.from("profiles").select("*, role:roles(name)").eq("id", state.session.user.id).single();
+  if(error) throw error;
+  state.profile = data;
 }
-// Listes dérivées du dictionnaire (avec repli sur les constantes si la feuille est vide).
-function lookupValues(type, fallback){
-  const rows = (state.lookups||[]).filter(l=>l.type===type && String(l.active).toUpperCase()!=="FALSE");
-  if(!rows.length) return fallback.slice();
-  return rows.sort((a,b)=>(Number(a.sort)||0)-(Number(b.sort)||0)).map(l=>l.value);
+async function loadData(){
+  const [tk, lk, an] = await Promise.all([ fetchTickets(), fetchLookups(), fetchAnnouncements() ]);
+  state.tickets=tk; state.lookups=lk; state.announcements=an;
+  if(!state.newService) state.newService = getServices()[0];
 }
-function getServices(){ return lookupValues("service", SERVICES); }
-function getPriorities(){ return lookupValues("priority", PRIORITIES); }
-
-// Reconnexion silencieuse du compte mur d'écran (fonctionnement 24/7).
-// Le jeton de session expire après 6 h ; on se reconnecte automatiquement avec
-// les identifiants stockés localement pour ce poste de supervision.
-async function monRelogin(){
-  try{
-    const c = JSON.parse(localStorage.getItem(MON_CREDS_KEY)||"null");
-    if(!c || !c.email || !c.password) return false;
-    const r = await apiPost({action:"login", email:c.email, password:c.password});
-    state.session = { token:r.token, email:r.email, name:r.name, role:r.role };
-    localStorage.setItem(TOKEN_KEY, r.token);
-    localStorage.setItem(SESS_KEY, JSON.stringify({email:r.email,name:r.name,role:r.role}));
-    return true;
-  }catch(e){ return false; }
+async function fetchTickets(){
+  const { data, error } = await sb.from("tickets")
+    .select("*, requester:requester_id(full_name,email), assignee:assignee_id(full_name)")
+    .order("created_at",{ascending:false});
+  if(error) throw error; return data||[];
 }
-
-// ------------------------ Auto-refresh (monitoring) ------------------------
-let monDataTimer=null, monClockTimer=null, staffTimer=null;
-function ensureMonitorTimers(){
-  const on = isMonitor() && !state.booting && !state.mustChangePassword;
-  if(on && !monDataTimer){
-    monDataTimer = setInterval(async ()=>{
-      if(!isMonitor()){ clearInterval(monDataTimer); monDataTimer=null; return; }
-      try{ await refreshTickets(); state.lastSync=Date.now(); state.monStale=false; render(); }
-      catch(e){
-        // Reconnexion silencieuse puis nouvel essai (fonctionnement 24/7).
-        if(await monRelogin()){
-          try{ await refreshTickets(); state.lastSync=Date.now(); state.monStale=false; }
-          catch(e2){ state.monStale=true; }
-        } else { state.monStale=true; }
-        render();
-      }
-    }, 10000);
-  }
-  if(on && !monClockTimer){
-    monClockTimer = setInterval(()=>{ const c=document.getElementById("mon-clock"); if(c) c.textContent=new Date().toLocaleTimeString("fr-FR"); }, 1000);
-  }
-  if(!on){
-    if(monDataTimer){ clearInterval(monDataTimer); monDataTimer=null; }
-    if(monClockTimer){ clearInterval(monClockTimer); monClockTimer=null; }
-  }
-
-  // Rafraîchissement auto des écrans de travail admin/super (toutes les 30 s),
-  // suspendu pendant la saisie pour ne pas effacer un texte en cours.
-  const staffOn = isStaff() && !state.booting && !state.mustChangePassword;
-  if(staffOn && !staffTimer){
-    staffTimer = setInterval(async ()=>{
-      if(!isStaff()){ clearInterval(staffTimer); staffTimer=null; return; }
-      const tag = (document.activeElement && document.activeElement.tagName) || "";
-      const typing = tag==="INPUT" || tag==="TEXTAREA" || tag==="SELECT";
-      const inDetailOrForm = !!state.selectedTicketId || state.reopening || state.view==="users" || state.view==="audit";
-      if(typing || inDetailOrForm) return; // on ne perturbe pas une saisie ni un formulaire ouvert
-      try{ await refreshTickets(); render(); }catch(e){ /* silencieux ; conserve l'affichage courant */ }
-    }, 30000);
-  }
-  if(!staffOn && staffTimer){ clearInterval(staffTimer); staffTimer=null; }
+async function fetchLookups(){
+  const { data } = await sb.from("lookups").select("*").eq("is_active",true).order("sort_order");
+  return data||[];
 }
+async function fetchAnnouncements(){
+  const { data } = await sb.from("announcements").select("*, author:author_id(full_name)").eq("is_active",true).order("publish_date",{ascending:false});
+  return data||[];
+}
+async function reloadTickets(){ state.tickets = await fetchTickets(); }
 
 // =========================== RENDER ROOT ===========================
 function renderApp(){
-  if(state.session && isMonitor() && !state.booting && !state.mustChangePassword && !state.loadError){
-    return `${renderHeader()}<div class="monitor-wrap">${renderMain()}</div>`;
-  }
-  return `${renderHeader()}<main>${renderMain()}</main><footer class="app-footer">MEDLOG — Support Desk</footer>`;
+  return `${renderHeader()}<main>${renderMain()}</main><footer class="app-footer">MEDLOG IT Ops — Phase 1 (Supabase)</footer>`;
 }
-
 function renderHeader(){
-  let nav = "", session = "";
-  if(state.session && isMonitor()){
-    nav = `<div class="topnav">
-      <button data-action="mon-nav" data-view="monitor" class="${state.view==='monitor'?'active':''}">Monitoring</button>
-      <button data-action="mon-nav" data-view="report" class="${state.view==='report'?'active':''}">Rapport</button>
-    </div>`;
-    session = `<div class="session-info"><span id="mon-clock" class="role-chip" style="font-family:var(--mono);letter-spacing:.5px;">${new Date().toLocaleTimeString("fr-FR")}</span>
-      <button class="link" data-action="refresh-now">actualiser</button>
-      <button class="link" data-action="fullscreen">plein écran</button>
-      <button class="link" data-action="logout">quitter</button></div>`;
-  } else if(state.session){
-    const role = state.session.role;
-    const tabs = [["dashboard","Tableau de bord"]];
-    if(role==="user") tabs.push(["tickets","Mes tickets"]); else tabs.push(["tickets","Tickets"]);
-    if(role==="admin"){ tabs.push(["users","Utilisateurs"]); tabs.push(["maintenance","Maintenance"]); tabs.push(["audit","Audit"]); }
-    nav = `<div class="topnav">${tabs.map(([v,l])=>`<button data-action="nav" data-view="${v}" class="${state.view===v?'active':''}">${l}</button>`).join("")}</div>`;
-    session = `<div class="session-info"><span class="role-chip">${ROLE_LABEL[role]||role}</span>${esc(state.session.name)}<button class="link" data-action="logout">déconnexion</button></div>`;
+  let nav="", session="";
+  if(state.profile){
+    const r=roleName();
+    const tabs=[["dashboard","Tableau de bord"]];
+    tabs.push(["tickets", r==="user"?"Mes tickets":"Tickets"]);
+    if(isAdmin()){ tabs.push(["users","Utilisateurs"]); tabs.push(["maintenance","Maintenance"]); }
+    nav=`<div class="topnav">${tabs.map(([v,l])=>`<button data-action="nav" data-view="${v}" class="${state.view===v?'active':''}">${l}</button>`).join("")}</div>`;
+    session=`<div class="session-info"><span class="role-chip">${ROLE_LABEL[r]||r}</span>${esc(myName())}<button class="link" data-action="logout">déconnexion</button></div>`;
   }
-  return `<header class="topbar">
-    <div class="brand"><div class="mark">ML</div><div><div class="name">MEDLOG Support Desk</div><div class="sub">${isMonitor()?"Monitoring":"Tickets"}</div></div></div>
-    ${nav}${session}
-  </header>`;
+  return `<header class="topbar"><div class="brand"><div class="mark">ML</div><div><div class="name">MEDLOG IT Ops</div><div class="sub">Support Desk</div></div></div>${nav}${session}</header>`;
 }
-
 function renderMain(){
-  if(state.booting) return renderLoading();
-  if(!state.session) return renderLogin();
-  if(state.mustChangePassword) return renderForcePassword();
-  if(state.loadError) return renderLoadError();
-  if(isMonitor()) return state.view==="report" ? renderReport() : renderMonitor();
+  if(state.booting) return `<div class="gate"><h1>Chargement…</h1><p>Connexion à la base sécurisée.</p></div>`;
+  if(!state.session || !state.profile) return renderLogin();
+  if(state.loadError) return `<div class="gate"><h1>Erreur de chargement</h1><div class="card"><div class="error-msg">${esc(state.loadError)}</div><button class="btn" data-action="retry" style="margin-top:12px;">Réessayer</button></div></div>`;
   if(state.view==="dashboard") return renderDashboard();
   if(state.view==="tickets") return renderTicketsArea();
-  if(state.view==="users") return state.session.role==="admin" ? renderUsers() : renderDashboard();
-  if(state.view==="maintenance") return state.session.role==="admin" ? renderMaintenance() : renderDashboard();
-  if(state.view==="audit") return state.session.role==="admin" ? renderAudit() : renderDashboard();
+  if(state.view==="users") return isAdmin()?renderUsers():renderDashboard();
+  if(state.view==="maintenance") return isAdmin()?renderMaintenance():renderDashboard();
   return "";
-}
-
-function renderLoading(){ return `<div class="gate"><h1>Connexion en cours…</h1><p>Merci de patienter un moment.</p></div>`; }
-function renderLoadError(){
-  return `<div class="gate"><h1>Connexion impossible</h1><p>Le backend n'a pas pu être joint.</p>
-    <div class="card"><div class="error-msg" style="margin-bottom:12px;">${esc(state.loadError)}</div>
-    <div class="hint" style="margin-bottom:12px;">Vérifiez que API_URL est bien renseignée et que le déploiement Apps Script est en accès « Tout le monde ».</div>
-    <button class="btn" data-action="retry">Réessayer</button></div></div>`;
 }
 
 // =========================== LOGIN ===========================
 function renderLogin(){
-  return `<div class="gate">
-    <h1>MEDLOG Support Desk</h1>
-    <p>Connectez-vous avec l'adresse e-mail et le mot de passe fournis par l'administrateur.</p>
+  return `<div class="gate"><h1>MEDLOG IT Ops</h1><p>Connectez-vous avec votre adresse e-mail et votre mot de passe.</p>
     <div class="card">
-      <div class="field"><label for="login-email">Adresse e-mail</label>
-        <input type="text" id="login-email" placeholder="prenom.nom@medlog.com" value="${esc(state.loginEmailPrefill)}"></div>
-      <div class="field"><label for="login-password">Mot de passe</label>
-        <input type="password" id="login-password" placeholder="••••••••"></div>
+      <div class="field"><label for="login-email">Adresse e-mail</label><input type="email" id="login-email" placeholder="prenom.nom@medlog.com"></div>
+      <div class="field"><label for="login-password">Mot de passe</label><input type="password" id="login-password" placeholder="••••••••"></div>
       ${state.loginError?`<div class="error-msg">${esc(state.loginError)}</div>`:""}
       <button class="btn" data-action="login" style="margin-top:6px;">Se connecter</button>
-      <div class="hint">Les comptes sont créés uniquement par l'administrateur (aucune auto-inscription).</div>
-    </div>
-  </div>`;
+      <div class="hint">Comptes gérés par l'administrateur via Supabase.</div>
+    </div></div>`;
 }
 
-function renderForcePassword(){
-  return `<div class="gate">
-    <h1>Changement de mot de passe requis</h1>
-    <p>Pour des raisons de sécurité, définissez un nouveau mot de passe avant de continuer.</p>
-    <div class="card">
-      <div class="field"><label for="np1">Nouveau mot de passe</label><input type="password" id="np1" placeholder="6 caractères minimum"></div>
-      <div class="field"><label for="np2">Confirmer</label><input type="password" id="np2"></div>
-      ${state.pwChangeError?`<div class="error-msg">${esc(state.pwChangeError)}</div>`:""}
-      <button class="btn" data-action="do-change-password">Enregistrer</button>
-    </div>
-  </div>`;
+// =========================== DASHBOARD ===========================
+function announcementBanner(){
+  const list=state.announcements; if(!list.length) return "";
+  const item=a=>`<span class="ab-item"><strong>${esc(a.title)}</strong>${a.body?(" — "+esc(a.body)):""}<span class="ab-meta">${esc(a.author?a.author.full_name:"")}${a.publish_date?(" · "+new Date(a.publish_date).toLocaleDateString("fr-FR")):""}</span></span>`;
+  const seq=list.map(item).join("");
+  return `<div class="announce-banner"><div class="ab-tag">📢 Infos</div><div class="ab-viewport"><div class="ab-track">${seq}${seq}</div></div></div>`;
 }
-
-// =========================== MONITORING (mur d'écran) ===========================
-function monActiveMedlogix(){
-  return medlogixTickets()
-    .filter(t=>t.status==="In Progress"||t.status==="Testing"||t.status==="Pending"||t.status==="Reopened")
-    .sort((a,b)=> statusRank(a.status)-statusRank(b.status) || priorityRank(a.priority)-priorityRank(b.priority) || Number(a.createdAt)-Number(b.createdAt));
-}
-function monBars(items){
-  if(!items.length) return `<div style="color:#7e93b3;font-size:13px;">Aucune donnée.</div>`;
-  const max = Math.max(1,...items.map(i=>i.count));
-  return items.map(i=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;">
-    <div style="width:130px;font-size:12px;color:#9fb3d1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(i.label)}">${esc(i.label)}</div>
-    <div style="flex:1;height:7px;background:#1c2a42;border-radius:5px;overflow:hidden;"><div style="height:100%;width:${Math.round(i.count/max*100)}%;background:#3aa0ff;border-radius:5px;"></div></div>
-    <div style="font-family:var(--mono);font-size:12px;width:24px;text-align:right;color:#cfe0f5;">${i.count}</div></div>`).join("");
-}
-
-function renderMonitor(){
-  const ml = medlogixTickets();
-  const c = s => ml.filter(t=>t.status===s).length;
-  const openCount = ml.filter(t=>t.status!=="Closed").length;
-  const overdueCount = ml.filter(isOverdue).length;
-
-  const kpis = `<div class="mon-kpis">
-    <div class="mon-kpi"><div class="n">${openCount}</div><div class="l">MEDLOGIX ouverts</div></div>
-    <div class="mon-kpi amber"><div class="n">${c("Pending")}</div><div class="l">Pending</div></div>
-    <div class="mon-kpi blue"><div class="n">${c("In Progress")}</div><div class="l">In Progress</div></div>
-    <div class="mon-kpi violet"><div class="n">${c("Testing")}</div><div class="l">Testing</div></div>
-    <div class="mon-kpi pink"><div class="n">${c("Reopened")}</div><div class="l">Reopened</div></div>
-    <div class="mon-kpi red"><div class="n">${overdueCount}</div><div class="l">En retard</div></div>
-  </div>`;
-
-  const active = monActiveMedlogix();
-  const rows = active.slice(0,14).map(t=>{
-    const over = isOverdue(t);
-    const mod = t.module ? esc(t.module)+(t.window?(" / "+esc(t.window)):"") : "—";
-    return `<tr>
-      <td class="mon-id">${t.id}</td>
-      <td class="mon-subj">${esc(t.subject)}</td>
-      <td style="color:#9fb3d1;font-size:12.5px;">${mod}</td>
-      <td><span class="badge priority-${t.priority}">${esc(t.priority)}</span></td>
-      <td><span class="badge ${statusClass(t.status)}">${esc(t.status)}</span></td>
-      <td style="color:#9fb3d1;font-size:12.5px;">${t.assignedTo?esc(t.assignedTo):"—"}</td>
-      <td class="mon-age ${over?'over':''}">${daysSince(t.createdAt)} j</td>
-    </tr>`;
-  }).join("");
-  const mainPanel = `<div class="mon-panel">
-    <h3>Tâches MEDLOGIX à traiter (${active.length}) — les plus anciennes en tête</h3>
-    ${active.length?`<table class="mon-table"><thead><tr><th>N°</th><th>Sujet</th><th>Module</th><th>Priorité</th><th>Statut</th><th>Affecté à</th><th>Âge</th></tr></thead><tbody>${rows}</tbody></table>`
-      :`<div style="color:#7e93b3;padding:24px 0;text-align:center;">Aucune tâche MEDLOGIX en cours. 🎉</div>`}
-  </div>`;
-
-  const byStatus = STATUSES.filter(s=>s!=="Closed").map(s=>({label:s,count:c(s)})).filter(i=>i.count>0);
-  const byModule = (()=>{ const m={}; ml.filter(t=>t.status!=="Closed").forEach(t=>{ const k=t.module||"—"; m[k]=(m[k]||0)+1; }); return Object.keys(m).map(k=>({label:k,count:m[k]})).sort((a,b)=>b.count-a.count).slice(0,8); })();
-
-  // Autres services (compte uniquement, non prioritaires)
-  const others = (()=>{ const m={}; tickets.filter(t=>t.service!=="MEDLOGIX"&&t.status!=="Closed").forEach(t=>{ m[t.service]=(m[t.service]||0)+1; }); return Object.keys(m).map(k=>({label:k,count:m[k]})); })();
-  const othersTotal = others.reduce((a,b)=>a+b.count,0);
-
-  const sidePanel = `
-    <div class="mon-panel"><h3>Répartition par statut (MEDLOGIX)</h3>${monBars(byStatus)}</div>
-    <div class="mon-panel"><h3>Par module (ouverts)</h3>${monBars(byModule)}</div>
-    <div class="mon-panel"><h3>Autres services (non prioritaires) — ${othersTotal} ouverts</h3>
-      <div class="mon-other">${others.length?others.map(o=>`<span class="chip">${esc(o.label.split(" (")[0])} : ${o.count}</span>`).join(""):'<span style="color:#7e93b3;font-size:12.5px;">Aucun</span>'}</div>
-    </div>`;
-
-  const stale = state.monStale ? `<div class="mon-stale">⚠ Synchronisation interrompue (session peut-être expirée). Affichage des dernières données connues. Reconnexion conseillée.</div>` : "";
-
-  return `<div class="mon">
-    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
-      <div style="font-size:20px;font-weight:800;">Monitoring MEDLOGIX — avancement des tâches</div>
-      <div style="font-size:12px;color:#7e93b3;">Heure locale (${esc(localTZ())})</div>
-    </div>
-    ${stale}
-    ${kpis}
-    <div class="mon-grid"><div>${mainPanel}</div><div>${sidePanel}</div></div>
-    <div class="mon-foot">
-      <span>Dernière synchro : ${state.lastSync?fmtTime(state.lastSync):"—"} · actualisation automatique toutes les 10 s</span>
-      <span>${ml.length} tickets MEDLOGIX au total · ${ml.filter(t=>t.status==="Closed").length} clos</span>
-    </div>
-  </div>`;
-}
-
-// =========================== RAPPORT ===========================
-function renderReport(){
-  const data = tickets.filter(inPeriod);
-  const ml = data.filter(t=>t.service==="MEDLOGIX");
-  const c = s => ml.filter(t=>t.status===s).length;
-
-  const periods = [["today","Aujourd'hui"],["yesterday","Hier"],["last7","7 derniers jours"],["this_month","Ce mois"],["prev_month","Mois précédent"],["this_year","Cette année"],["custom","Période personnalisée"]];
-  const periodSelect = `<select id="dash-period">${periods.map(([v,l])=>`<option value="${v}" ${state.dashPeriod===v?'selected':''}>${l}</option>`).join("")}</select>`;
-  const customRange = state.dashPeriod==="custom" ? `
-    <div class="field" style="margin-bottom:0;"><label>Du</label><input type="date" id="cf" value="${esc(state.customFrom)}"></div>
-    <div class="field" style="margin-bottom:0;"><label>Au</label><input type="date" id="ct" value="${esc(state.customTo)}"></div>` : "";
-
-  const avg = (()=>{ const ds=ml.filter(t=>t.status==="Closed").map(t=>{ const e=[...(t.history||[])].reverse().find(h=>h.to==="Closed"); return ((e?e.date:Date.now())-Number(t.createdAt))/86400000; }); return ds.length?(ds.reduce((a,b)=>a+b,0)/ds.length):null; })();
-
-  const tiles = `<div class="stat-row">
-    <div class="stat"><div class="n">${ml.length}</div><div class="l">MEDLOGIX (total)</div></div>
-    <div class="stat accent"><div class="n">${ml.filter(t=>t.status!=="Closed").length}</div><div class="l">Ouverts</div></div>
+function scoped(){ return state.tickets.filter(inPeriod); }
+function renderDashboard(){
+  const data=scoped(); const c=s=>data.filter(t=>t.status===s).length;
+  const periods=[["today","Aujourd'hui"],["yesterday","Hier"],["last7","7 derniers jours"],["this_month","Ce mois"],["prev_month","Mois précédent"],["this_year","Cette année"],["custom","Personnalisée"]];
+  const periodSelect=`<select id="dash-period">${periods.map(([v,l])=>`<option value="${v}" ${state.dashPeriod===v?'selected':''}>${l}</option>`).join("")}</select>`;
+  const customRange=state.dashPeriod==="custom"?`<div class="field" style="margin-bottom:0;"><label>Du</label><input type="date" id="cf" value="${esc(state.customFrom)}"></div><div class="field" style="margin-bottom:0;"><label>Au</label><input type="date" id="ct" value="${esc(state.customTo)}"></div>`:"";
+  const avg=avgResolution(data);
+  const kpis=`<div class="stat-row">
+    <div class="stat"><div class="n">${data.length}</div><div class="l">Total tickets</div></div>
+    <div class="stat accent"><div class="n">${c("Pending")}</div><div class="l">Pending</div></div>
     <div class="stat accent"><div class="n">${c("In Progress")}</div><div class="l">In Progress</div></div>
     <div class="stat accent"><div class="n">${c("Testing")}</div><div class="l">Testing</div></div>
     <div class="stat"><div class="n">${c("Closed")}</div><div class="l">Closed</div></div>
-    <div class="stat"><div class="n">${avg==null?'—':avg.toFixed(1)+'j'}</div><div class="l">Tps moyen résol.</div></div>
+    <div class="stat ${data.filter(isOverdue).length?'alert':''}"><div class="n">${avg==null?'—':avg.toFixed(1)+'j'}</div><div class="l">Tps moyen résol.</div></div>
   </div>`;
-
-  const grp = (arr,key)=>{ const m={}; arr.forEach(t=>{ const k=key(t)||"—"; m[k]=(m[k]||0)+1; }); return Object.keys(m).map(k=>[k,m[k]]).sort((a,b)=>b[1]-a[1]); };
-  const tbl = (title,pairs)=>`<div class="card" style="margin-bottom:16px;"><div class="section-label">${title}</div>
-    <table class="audit"><tbody>${pairs.length?pairs.map(([k,v])=>`<tr><td>${esc(k)}</td><td style="text-align:right;font-family:var(--mono);">${v}</td></tr>`).join(""):`<tr><td>Aucune donnée</td><td></td></tr>`}</tbody></table></div>`;
-
-  const open = ml.filter(t=>t.status!=="Closed").sort((a,b)=>statusRank(a.status)-statusRank(b.status)||priorityRank(a.priority)-priorityRank(b.priority)||Number(a.createdAt)-Number(b.createdAt));
-  const openRows = open.map(t=>`<tr>
-    <td class="ticket-id">${t.id}</td><td>${esc(t.subject)}</td>
-    <td>${t.module?esc(t.module):"—"}</td>
-    <td>${esc(t.priority)}</td><td>${esc(t.status)}</td>
-    <td>${esc(t.requesterName||t.requesterEmail)}</td>
-    <td>${t.assignedTo?esc(t.assignedTo):"—"}</td>
-    <td style="font-family:var(--mono);">${daysSince(t.createdAt)} j</td></tr>`).join("");
-
-  return `<h1 class="page-title">Rapport MEDLOGIX</h1>
-    <p class="page-sub">Synthèse de l'avancement des tâches MEDLOGIX — généré le ${fmtDate(Date.now())} (${esc(localTZ())}).</p>
-    <div class="filters no-print"><div class="field" style="margin-bottom:0;"><label>Période</label>${periodSelect}</div>${customRange}
-      <button class="btn secondary" data-action="print-report">Imprimer / PDF</button>
-      <button class="btn secondary" data-action="export-medlogix">Exporter CSV (MEDLOGIX)</button>
-    </div>
-    ${tiles}
-    <div class="two-col">
-      ${tbl("Par statut", grp(ml,t=>t.status))}
-      ${tbl("Par priorité", grp(ml,t=>t.priority))}
-    </div>
-    <div class="two-col">
-      ${tbl("Par module", grp(ml,t=>t.module))}
-      ${tbl("Par agent affecté", grp(ml,t=>t.assignedTo||"Non affecté"))}
-    </div>
-    <div class="card"><div class="section-label">Tâches MEDLOGIX ouvertes (${open.length})</div>
-      ${open.length?`<div style="overflow-x:auto;"><table class="audit"><thead><tr><th>N°</th><th>Sujet</th><th>Module</th><th>Priorité</th><th>Statut</th><th>Demandeur</th><th>Affecté</th><th>Âge</th></tr></thead><tbody>${openRows}</tbody></table></div>`:`<div class="empty-state">Aucune tâche ouverte sur cette période.</div>`}
-    </div>`;
-}
-
-// =========================== DASHBOARD (rôles standards) ===========================
-function scopedTickets(){ return tickets.filter(inPeriod); }
-
-function renderDashboard(){
-  const data = scopedTickets();
-  const count = s => data.filter(t=>t.status===s).length;
-  const total = data.length;
-
-  const periods = [["today","Aujourd'hui"],["yesterday","Hier"],["last7","7 derniers jours"],["this_month","Ce mois"],["prev_month","Mois précédent"],["this_year","Cette année"],["custom","Période personnalisée"]];
-  const periodSelect = `<select id="dash-period">${periods.map(([v,l])=>`<option value="${v}" ${state.dashPeriod===v?'selected':''}>${l}</option>`).join("")}</select>`;
-  const customRange = state.dashPeriod==="custom" ? `
-    <div class="field" style="margin-bottom:0;"><label>Du</label><input type="date" id="cf" value="${esc(state.customFrom)}"></div>
-    <div class="field" style="margin-bottom:0;"><label>Au</label><input type="date" id="ct" value="${esc(state.customTo)}"></div>` : "";
-
-  const avgRes = avgResolution(data);
-  const kpis = `<div class="stat-row">
-    <div class="stat"><div class="n">${total}</div><div class="l">Total tickets</div></div>
-    <div class="stat accent"><div class="n">${count("Pending")}</div><div class="l">Nouveaux (Pending)</div></div>
-    <div class="stat accent"><div class="n">${count("In Progress")}</div><div class="l">In Progress</div></div>
-    <div class="stat accent"><div class="n">${count("Testing")}</div><div class="l">Testing</div></div>
-    <div class="stat"><div class="n">${count("Closed")}</div><div class="l">Closed</div></div>
-    <div class="stat ${data.filter(isOverdue).length?'alert':''}"><div class="n">${avgRes==null?'—':avgRes.toFixed(1)+'j'}</div><div class="l">Tps moyen résolution</div></div>
+  const charts=`<div class="two-col">
+    <div class="card"><div class="section-label">Par service</div>${barList(groupCount(data,t=>t.service))}</div>
+    <div class="card"><div class="section-label">MEDLOGIX par module</div>${barList(groupCount(data.filter(t=>t.service==="MEDLOGIX"),t=>t.module))}</div>
+  </div><div class="two-col">
+    <div class="card"><div class="section-label">Par priorité</div>${barList(groupCount(data,t=>t.priority))}</div>
+    <div class="card"><div class="section-label">Par statut</div>${barList(groupCount(data,t=>t.status))}</div>
   </div>`;
-
-  const byService = groupCount(data, t=>t.service);
-  const byPriority = groupCount(data, t=>t.priority);
-  const byCreator = groupCount(data, t=>t.requesterName||t.requesterEmail);
-  const byModule = groupCount(data.filter(t=>t.service==="MEDLOGIX"), t=>t.module);
-
-  const charts = `<div class="two-col">
-    <div class="card"><div class="section-label">Tickets par service</div>${barList(byService)}</div>
-    <div class="card"><div class="section-label">Tickets MEDLOGIX par module</div>${barList(byModule)}</div>
-  </div>
-  <div class="two-col">
-    <div class="card"><div class="section-label">Tickets par priorité</div>${barList(byPriority)}</div>
-    <div class="card"><div class="section-label">Tickets par créateur</div>${barList(byCreator)}</div>
-  </div>
-  <div class="two-col">
-    <div class="card"><div class="section-label">Tendance mensuelle (12 mois)</div>${monthlyTrend(data)}</div>
-    <div class="card"><div class="section-label">Tickets par statut</div>${barList(groupCount(data, t=>t.status))}</div>
-  </div>`;
-
-  const active = data.filter(t=>t.status==="In Progress"||t.status==="Testing"||t.status==="Reopened")
-    .sort((a,b)=>statusRank(a.status)-statusRank(b.status)||priorityRank(a.priority)-priorityRank(b.priority));
-  const activeBlock = `<div class="card" style="margin-bottom:18px;"><div class="section-label">À traiter en priorité — In Progress / Testing / Reopened</div>
-    ${active.length?`<div class="ticket-list">${active.slice(0,8).map(rowHtml).join("")}</div>`:`<div class="empty-state">Rien en cours sur cette période.</div>`}</div>`;
-
-  const recent = data.slice().sort((a,b)=>Number(b.createdAt)-Number(a.createdAt)).slice(0,6);
-  const recentBlock = `<div class="card"><div class="section-label">Tickets récents</div>
-    ${recent.length?`<div class="ticket-list">${recent.map(rowHtml).join("")}</div>`:`<div class="empty-state">Aucun ticket sur cette période.</div>`}</div>`;
-  const activities = latestActivities(data, 8);
-  const activityBlock = `<div class="card"><div class="section-label">Dernières activités</div>
-    ${activities.length?`<div class="thread">${activities.map(a=>`<div class="thread-item ${a.role!=='user'?'staff':''}"><div class="t-head"><span class="who">${esc(a.by)}</span><span>${fmtDate(a.date)}</span></div><div class="t-body">${esc(a.text)} <span class="ticket-id">(${a.id})</span></div></div>`).join("")}</div>`:`<div class="empty-state">Aucune activité.</div>`}</div>`;
-
-  return `<h1 class="page-title">Tableau de bord</h1>
-    <p class="page-sub">Vue d'ensemble du Support Desk IT.</p>
+  const active=data.filter(t=>["In Progress","Testing","Reopened"].includes(t.status)).sort((a,b)=>statusRank(a.status)-statusRank(b.status)||priorityRank(a.priority)-priorityRank(b.priority));
+  const activeBlock=`<div class="card" style="margin-bottom:18px;"><div class="section-label">À traiter — In Progress / Testing / Reopened</div>${active.length?`<div class="ticket-list">${active.slice(0,8).map(rowHtml).join("")}</div>`:`<div class="empty-state">Rien en cours.</div>`}</div>`;
+  const recent=data.slice(0,6);
+  const recentBlock=`<div class="card"><div class="section-label">Tickets récents</div>${recent.length?`<div class="ticket-list">${recent.map(rowHtml).join("")}</div>`:`<div class="empty-state">Aucun ticket.</div>`}</div>`;
+  return `<h1 class="page-title">Tableau de bord</h1><p class="page-sub">Vue d'ensemble du Support Desk IT.</p>
     ${announcementBanner()}
     <div class="filters"><div class="field" style="margin-bottom:0;"><label>Période</label>${periodSelect}</div>${customRange}</div>
-    ${kpis}
-    ${activeBlock}
-    ${charts}
-    <div class="two-col">${recentBlock}${activityBlock}</div>
-    <div class="tz-note">Heures affichées dans votre fuseau : ${esc(localTZ())}.</div>`;
+    ${kpis}${activeBlock}${charts}${recentBlock}`;
 }
+function avgResolution(data){ const ds=data.filter(t=>t.status==="Closed"&&t.closed_at).map(t=>(new Date(t.closed_at)-new Date(t.created_at))/86400000); return ds.length?ds.reduce((a,b)=>a+b,0)/ds.length:null; }
+function groupCount(data,fn){ const m={}; data.forEach(t=>{const k=fn(t)||"—"; m[k]=(m[k]||0)+1;}); return Object.keys(m).map(k=>({label:k,count:m[k]})).sort((a,b)=>b.count-a.count); }
+function barList(items){ if(!items.length) return `<div class="empty-state">Aucune donnée.</div>`; const max=Math.max(1,...items.map(i=>i.count)); return `<div class="bars">${items.map(i=>`<div class="bar-row"><div class="b-label" title="${esc(i.label)}">${esc(i.label)}</div><div class="b-track"><div class="b-fill" style="width:${Math.round(i.count/max*100)}%"></div></div><div class="b-count">${i.count}</div></div>`).join("")}</div>`; }
 
-// Bandeau d'annonces défilant (Phase 1) — affiché en tête du tableau de bord.
-function announcementBanner(){
-  const list = (state.announcements||[]).filter(a=>String(a.active).toUpperCase()!=="FALSE");
-  if(!list.length) return "";
-  const item = a=>`<span class="ab-item"><strong>${esc(a.title)}</strong>${a.body?(" — "+esc(a.body)):""}<span class="ab-meta">${esc(a.author||"")}${a.publish_date?(" · "+new Date(Number(a.publish_date)).toLocaleDateString("fr-FR")):""}</span></span>`;
-  const seq = list.map(item).join("");
-  // doublé pour un défilement continu et fluide
-  return `<div class="announce-banner"><div class="ab-tag">📢 Infos</div><div class="ab-viewport"><div class="ab-track">${seq}${seq}</div></div></div>`;
+// =========================== TICKETS ===========================
+function reqName(t){ return t.requester ? (t.requester.full_name||t.requester.email) : "—"; }
+function rowHtml(t){
+  const overdue=isOverdue(t)?`<span class="badge overdue">⚠ En retard</span>`:"";
+  const win=t.service==="MEDLOGIX"&&t.module?` — ${esc(t.module)}${t.screen?(" / "+esc(t.screen)):""}`:"";
+  return `<div class="ticket-row ${statusRowClass(t.status)}" data-action="open-ticket" data-id="${t.id}">
+    <div class="col-main"><div class="subject">${esc(t.subject)}</div>
+      <div class="meta"><span class="ticket-id">${esc(t.ticket_no||"—")}</span><span class="badge svc">${esc(t.service)}</span><span>${esc(reqName(t))}${win}</span><span>${fmtDate(t.created_at)}</span></div></div>
+    <div class="col-status"><span class="badge priority-${t.priority}">${esc(t.priority)}</span><span class="badge ${statusClass(t.status)}">${esc(t.status)}</span>${overdue}</div>
+  </div>`;
 }
-
-function avgResolution(data){
-  const ds = data.filter(t=>t.status==="Closed").map(t=>{
-    const e = [...(t.history||[])].reverse().find(h=>h.to==="Closed");
-    return ((e?e.date:Date.now()) - Number(t.createdAt))/86400000;
-  });
-  return ds.length ? ds.reduce((a,b)=>a+b,0)/ds.length : null;
-}
-function groupCount(data, keyFn){
-  const m = {}; data.forEach(t=>{ const k=keyFn(t)||"—"; m[k]=(m[k]||0)+1; });
-  return Object.keys(m).map(k=>({label:k,count:m[k]})).sort((a,b)=>b.count-a.count);
-}
-function barList(items){
-  if(!items.length) return `<div class="empty-state">Aucune donnée.</div>`;
-  const max = Math.max(1,...items.map(i=>i.count));
-  return `<div class="bars">${items.map(i=>`<div class="bar-row"><div class="b-label" title="${esc(i.label)}">${esc(i.label)}</div><div class="b-track"><div class="b-fill" style="width:${Math.round(i.count/max*100)}%"></div></div><div class="b-count">${i.count}</div></div>`).join("")}</div>`;
-}
-function monthlyTrend(data){
-  const now = new Date(); const buckets = [];
-  for(let i=11;i>=0;i--){ const d=new Date(now.getFullYear(),now.getMonth()-i,1); buckets.push({y:d.getFullYear(),m:d.getMonth(),label:d.toLocaleDateString("fr-FR",{month:"short"}),count:0}); }
-  data.forEach(t=>{ const d=new Date(Number(t.createdAt)); const b=buckets.find(b=>b.y===d.getFullYear()&&b.m===d.getMonth()); if(b)b.count++; });
-  const max = Math.max(1,...buckets.map(b=>b.count));
-  return `<div class="trend">${buckets.map(b=>`<div class="t-col"><div class="t-val">${b.count}</div><div class="t-bar" style="height:${Math.round(b.count/max*92)}%"></div><div class="t-lbl">${esc(b.label)}</div></div>`).join("")}</div>`;
-}
-function latestActivities(data, n){
-  const acts = [];
-  data.forEach(t=>(t.history||[]).forEach(h=>{
-    let text = "";
-    if(h.type==="create") text="a créé le ticket";
-    else if(h.type==="comment") text="a commenté : "+(h.comment||"");
-    else if(h.type==="status") text="a changé le statut "+h.from+" → "+h.to;
-    else if(h.type==="priority") text="a changé la priorité "+h.from+" → "+h.to;
-    else if(h.type==="reopen") text="a rouvert le ticket";
-    else if(h.type==="assign") text="a affecté le ticket à "+(h.to||"—");
-    else text=h.comment||"";
-    acts.push({ id:t.id, by:h.by||"—", role:h.role||"user", date:h.date, text });
-  }));
-  return acts.sort((a,b)=>Number(b.date)-Number(a.date)).slice(0,n);
-}
-
-// =========================== TICKETS AREA ===========================
 function renderTicketsArea(){
   if(state.selectedTicketId){
-    const t = getTicket(state.selectedTicketId);
-    if(t) return `<button class="back-link" data-action="back">&larr; Retour</button>` + renderTicketDetail(t);
-    state.selectedTicketId = null;
+    const t=getTicket(state.selectedTicketId);
+    if(t) return `<button class="back-link" data-action="back">&larr; Retour</button>`+renderTicketDetail(t);
+    state.selectedTicketId=null;
   }
-  if(state.session.role==="user") return renderUserTickets();
+  if(roleName()==="user") return renderUserTickets();
+  if(state.staffNew) return `<button class="back-link" data-action="staff-new-cancel">&larr; Retour à la liste</button>`+renderNewTicketForm();
   return renderStaffTickets();
 }
-
 function renderUserTickets(){
-  const sub = `<div class="subnav">
-    <button data-action="user-subview" data-view="new" class="${state.userSubview==='new'?'active':''}">Nouveau ticket</button>
-    <button data-action="user-subview" data-view="mine" class="${state.userSubview==='mine'?'active':''}">Mes tickets</button>
-  </div>`;
-  if(state.userSubview==="new") return sub + renderNewTicketForm();
-  const mine = tickets.slice().sort((a,b)=>Number(b.createdAt)-Number(a.createdAt));
-  return sub + (mine.length?`<div class="ticket-list">${mine.map(rowHtml).join("")}</div>`:`<div class="empty-state">Vous n'avez pas encore créé de ticket.</div>`);
+  return renderNewTicketForm() + `<div class="section-label" style="margin-top:24px;">Mes tickets</div>` + (state.tickets.length?`<div class="ticket-list">${state.tickets.map(rowHtml).join("")}</div>`:`<div class="empty-state">Aucun ticket pour le moment.</div>`);
 }
-
 function renderNewTicketForm(){
-  const svcOpts = getServices().map(s=>`<option value="${esc(s)}" ${state.newService===s?'selected':''}>${esc(s)}</option>`).join("");
-  const prioOpts = getPriorities().map(p=>`<option value="${esc(p)}" ${p==="Low"?"selected":""}>${esc(p)}</option>`).join("");
-  const isMedlogix = state.newService === "MEDLOGIX";
-  let medlogixFields = "";
-  if(isMedlogix){
-    const mods = Object.keys(MODULE_TREE);
-    const modOpts = mods.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join("");
-    const winOpts = MODULE_TREE[mods[0]].map(w=>`<option value="${esc(w)}">${esc(w)}</option>`).join("");
-    medlogixFields = `<div class="field-row">
-      <div class="field"><label for="t-module">Module concerné</label><select id="t-module" onchange="onModuleChange()">${modOpts}</select></div>
-      <div class="field"><label for="t-window">Écran / Fenêtre</label><select id="t-window">${winOpts}</select></div>
-    </div>`;
+  const svcOpts=getServices().map(s=>`<option value="${esc(s)}" ${state.newService===s?'selected':''}>${esc(s)}</option>`).join("");
+  const prioOpts=getPriorities().map(p=>`<option value="${esc(p)}" ${p==="Low"?"selected":""}>${esc(p)}</option>`).join("");
+  let medlogix="";
+  if(state.newService==="MEDLOGIX"){
+    const mods=Object.keys(MODULE_TREE);
+    medlogix=`<div class="field-row">
+      <div class="field"><label for="t-module">Module</label><select id="t-module" onchange="onModuleChange()">${mods.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join("")}</select></div>
+      <div class="field"><label for="t-screen">Écran / Fenêtre</label><select id="t-screen">${MODULE_TREE[mods[0]].map(w=>`<option value="${esc(w)}">${esc(w)}</option>`).join("")}</select></div></div>`;
   }
-  return `<h1 class="page-title">Nouveau ticket</h1>
-    <p class="page-sub">Sélectionnez le service concerné, puis décrivez votre demande ou incident IT.</p>
+  return `<h1 class="page-title">Nouveau ticket</h1><p class="page-sub">Décrivez votre demande ou incident IT.</p>
     <div class="card">
-      <div class="field"><label for="t-service">Service</label>
-        <select id="t-service" onchange="onServiceChange()">${svcOpts}</select></div>
-      ${medlogixFields}
+      <div class="field"><label for="t-service">Service</label><select id="t-service" onchange="onServiceChange()">${svcOpts}</select></div>
+      ${medlogix}
       <div class="field" style="max-width:260px;"><label for="t-priority">Priorité</label><select id="t-priority">${prioOpts}</select></div>
       <div class="field"><label for="t-subject">Sujet</label><input type="text" id="t-subject" placeholder="Résumé court"></div>
-      <div class="field"><label for="t-desc">Description détaillée</label><textarea id="t-desc" placeholder="Décrivez précisément le problème ou la demande."></textarea></div>
+      <div class="field"><label for="t-desc">Description</label><textarea id="t-desc" placeholder="Décrivez précisément le problème."></textarea></div>
       <div id="form-error"></div>
-      <button class="btn" data-action="submit-ticket">Soumettre le ticket</button>
+      <button class="btn" data-action="submit-ticket">Soumettre</button>
     </div>`;
 }
-function onServiceChange(){ state.newService = document.getElementById("t-service").value; render(); }
-function onModuleChange(){
-  const m = document.getElementById("t-module").value;
-  document.getElementById("t-window").innerHTML = (MODULE_TREE[m]||[]).map(w=>`<option value="${esc(w)}">${esc(w)}</option>`).join("");
-}
-
+function onServiceChange(){ state.newService=document.getElementById("t-service").value; render(); }
+function onModuleChange(){ const m=document.getElementById("t-module").value; document.getElementById("t-screen").innerHTML=(MODULE_TREE[m]||[]).map(w=>`<option value="${esc(w)}">${esc(w)}</option>`).join(""); }
 function renderStaffTickets(){
-  const f = state.filter;
-  const statusOpts = ["all",...STATUSES].map(s=>`<option value="${s}" ${f.status===s?'selected':''}>${s==='all'?'Tous statuts':s}</option>`).join("");
-  const svcOpts = ["all",...getServices()].map(s=>`<option value="${esc(s)}" ${f.service===s?'selected':''}>${s==='all'?'Tous services':esc(s)}</option>`).join("");
-  const prioOpts = ["all",...getPriorities()].map(p=>`<option value="${esc(p)}" ${f.priority===p?'selected':''}>${p==='all'?'Toutes priorités':esc(p)}</option>`).join("");
-  let list = tickets.slice();
+  const f=state.filter;
+  const statusOpts=["all",...STATUSES].map(s=>`<option value="${s}" ${f.status===s?'selected':''}>${s==='all'?'Tous statuts':s}</option>`).join("");
+  const svcOpts=["all",...getServices()].map(s=>`<option value="${esc(s)}" ${f.service===s?'selected':''}>${s==='all'?'Tous services':esc(s)}</option>`).join("");
+  const prioOpts=["all",...getPriorities()].map(p=>`<option value="${esc(p)}" ${f.priority===p?'selected':''}>${p==='all'?'Toutes priorités':esc(p)}</option>`).join("");
+  let list=state.tickets.slice();
   if(f.status!=="all") list=list.filter(t=>t.status===f.status);
   if(f.service!=="all") list=list.filter(t=>t.service===f.service);
   if(f.priority!=="all") list=list.filter(t=>t.priority===f.priority);
-  if(f.search.trim()){ const q=f.search.trim().toLowerCase(); list=list.filter(t=>t.id.toLowerCase().includes(q)||(t.subject||"").toLowerCase().includes(q)||(t.requesterName||"").toLowerCase().includes(q)||(t.requesterEmail||"").toLowerCase().includes(q)); }
-  list.sort((a,b)=>statusRank(a.status)-statusRank(b.status)||priorityRank(a.priority)-priorityRank(b.priority)||Number(b.createdAt)-Number(a.createdAt));
+  if(f.search.trim()){ const q=f.search.toLowerCase(); list=list.filter(t=>(t.ticket_no||"").toLowerCase().includes(q)||(t.subject||"").toLowerCase().includes(q)||reqName(t).toLowerCase().includes(q)); }
+  list.sort((a,b)=>statusRank(a.status)-statusRank(b.status)||priorityRank(a.priority)-priorityRank(b.priority)||new Date(b.created_at)-new Date(a.created_at));
+  const newBtn = canCreate()?`<button class="btn secondary" data-action="goto-new">+ Nouveau ticket</button>`:"";
   return `<h1 class="page-title">Tickets</h1><p class="page-sub">Traitement des tickets de support IT.</p>
     <div class="filters">
       <div class="field"><label>Statut</label><select id="f-status">${statusOpts}</select></div>
       <div class="field"><label>Service</label><select id="f-service">${svcOpts}</select></div>
       <div class="field"><label>Priorité</label><select id="f-priority">${prioOpts}</select></div>
       <div class="field search"><label>Recherche</label><input type="text" id="f-search" placeholder="N°, sujet, demandeur…" value="${esc(f.search)}"></div>
-      <button class="btn secondary" data-action="export-csv">Exporter CSV</button>
+      ${newBtn}
     </div>
-    ${list.length?`<div class="ticket-list">${list.map(rowHtml).join("")}</div>`:`<div class="empty-state">Aucun ticket ne correspond à ces filtres.</div>`}`;
+    ${list.length?`<div class="ticket-list">${list.map(rowHtml).join("")}</div>`:`<div class="empty-state">Aucun ticket.</div>`}`;
 }
-
-function rowHtml(t){
-  const overdue = isOverdue(t)?`<span class="badge overdue">⚠ En retard</span>`:"";
-  const win = t.service==="MEDLOGIX" && t.module ? ` — ${esc(t.module)}${t.window?(" / "+esc(t.window)):""}` : "";
-  return `<div class="ticket-row ${statusRowClass(t.status)}" data-action="open-ticket" data-id="${t.id}">
-    <div class="col-main"><div class="subject">${esc(t.subject)}</div>
-      <div class="meta"><span class="ticket-id">${t.id}</span><span class="badge svc">${esc(t.service)}</span><span>${esc(t.requesterName||t.requesterEmail)}${win}</span><span>${fmtDate(t.createdAt)}</span></div>
-    </div>
-    <div class="col-status"><span class="badge priority-${t.priority}">${esc(t.priority)}</span><span class="badge ${statusClass(t.status)}">${esc(t.status)}</span>${overdue}</div>
-  </div>`;
-}
-
-// =========================== TICKET DETAIL ===========================
 function renderStepper(status){
-  const steps = ["Pending","In Progress","Testing","Closed"];
-  const disp = status==="Reopened" ? "In Progress" : status;
-  const idx = steps.indexOf(disp);
+  const steps=["Pending","In Progress","Testing","Closed"]; const disp=status==="Reopened"?"In Progress":status; const idx=steps.indexOf(disp);
   return `<div class="stepper">${steps.map((s,i)=>{const c=i<idx?"done":(i===idx?"current":"");return `<div class="step ${c}"><div class="line"></div><div class="dot"></div><div class="lbl">${s}</div></div>`;}).join("")}</div>`;
 }
-
+function nextStatusOptions(cur){ switch(cur){case "Pending":return ["In Progress","Testing","Closed"];case "In Progress":return ["Testing","Closed"];case "Testing":return ["In Progress","Closed"];case "Reopened":return ["In Progress","Testing","Closed"];default:return [];} }
 function renderTicketDetail(t){
-  const overdue = isOverdue(t);
-  const reopenBanner = t.status==="Reopened" ? `<div class="reopen-banner">🔁 Ticket rouvert — nouveau traitement requis.</div>` : "";
-  const win = t.service==="MEDLOGIX" && t.module ? `<span>${esc(t.module)}${t.window?(" / "+esc(t.window)):""}</span>` : "";
-  const assigned = t.assignedTo ? `<span>Affecté à : ${esc(t.assignedTo)}</span>` : "";
-
-  const history = (t.history||[]).map(h=>{
-    const staff = h.role!=="user";
-    let body = "";
+  const overdue=isOverdue(t);
+  const win=t.service==="MEDLOGIX"&&t.module?`<span>${esc(t.module)}${t.screen?(" / "+esc(t.screen)):""}</span>`:"";
+  const assigned=t.assignee?`<span>Affecté à : ${esc(t.assignee.full_name||"")}</span>`:"";
+  const history=(state.ticketActivity||[]).map(h=>{
+    const staff=h.actor&&h.actor.role&&h.actor.role.name!=="user";
+    let body="";
     if(h.type==="create") body="A créé le ticket.";
     else if(h.type==="comment") body=esc(h.comment);
-    else if(h.type==="status") body=`${h.comment?esc(h.comment)+"<br>":""}<span style="color:var(--ink-soft);font-size:12px;">Statut : <strong>${esc(h.from)}</strong> → <strong>${esc(h.to)}</strong></span>`;
-    else if(h.type==="priority") body=`<span style="color:var(--ink-soft);font-size:12px;">Priorité : <strong>${esc(h.from)}</strong> → <strong>${esc(h.to)}</strong></span>`;
-    else if(h.type==="reopen") body=`${h.comment?esc(h.comment)+"<br>":""}<span style="color:var(--ink-soft);font-size:12px;">Réouverture (${esc(h.from)} → Reopened)</span>`;
-    else if(h.type==="assign") body=`<span style="color:var(--ink-soft);font-size:12px;">Affectation : ${esc(h.from)} → ${esc(h.to)}</span>`;
-    return `<div class="thread-item ${staff?'staff':''}"><div class="t-head"><span class="who">${esc(h.by)} ${staff?`· ${ROLE_LABEL[h.role]||h.role}`:""}</span><span>${fmtDate(h.date)}</span></div><div class="t-body">${body}</div></div>`;
+    else if(h.type==="status") body=`${h.comment?esc(h.comment)+"<br>":""}<span style="color:var(--ink-soft);font-size:12px;">Statut : <strong>${esc(h.from_value)}</strong> → <strong>${esc(h.to_value)}</strong></span>`;
+    else if(h.type==="priority") body=`<span style="color:var(--ink-soft);font-size:12px;">Priorité : <strong>${esc(h.from_value)}</strong> → <strong>${esc(h.to_value)}</strong></span>`;
+    else if(h.type==="reopen") body=`${h.comment?esc(h.comment)+"<br>":""}<span style="color:var(--ink-soft);font-size:12px;">Réouverture</span>`;
+    else if(h.type==="assign") body=`<span style="color:var(--ink-soft);font-size:12px;">Affectation : ${esc(h.to_value||"—")}</span>`;
+    else body=esc(h.comment||"");
+    const who=h.actor?(h.actor.full_name||"—"):"—";
+    return `<div class="thread-item ${staff?'staff':''}"><div class="t-head"><span class="who">${esc(who)}</span><span>${fmtDate(h.created_at)}</span></div><div class="t-body">${body}</div></div>`;
   }).join("");
-
-  let actions = "";
-  if(state.session.role==="user"){
-    actions = `<div class="section-label">Ajouter un commentaire</div>
-      <div class="resolve-box">
-        <div class="field"><label for="user-comment">Commentaire</label><textarea id="user-comment" placeholder="Précision, complément d'information…"></textarea></div>
-        <div id="act-error"></div>
-        <button class="btn" data-action="user-comment" data-id="${t.id}">Envoyer</button>
-      </div>`;
+  let actions="";
+  if(roleName()==="user"){
+    actions=`<div class="section-label">Ajouter un commentaire</div><div class="resolve-box"><div class="field"><label for="user-comment">Commentaire</label><textarea id="user-comment"></textarea></div><div id="act-error"></div><button class="btn" data-action="user-comment" data-id="${t.id}">Envoyer</button></div>`;
   } else if(isStaff()){
     if(state.reopening){
-      actions = `<div class="section-label">Réouverture</div><div class="resolve-box">
-        <div class="hint" style="margin-bottom:10px;">Le statut passera à « Reopened ».</div>
-        <div class="field"><label for="staff-comment">Motif de réouverture</label><textarea id="staff-comment"></textarea></div>
-        <div id="act-error"></div>
-        <div class="btn-row"><button class="btn" data-action="confirm-reopen" data-id="${t.id}">Confirmer</button><button class="btn secondary" data-action="cancel-reopen">Annuler</button></div>
-      </div>`;
+      actions=`<div class="section-label">Réouverture</div><div class="resolve-box"><div class="field"><label for="staff-comment">Motif</label><textarea id="staff-comment"></textarea></div><div id="act-error"></div><div class="btn-row"><button class="btn" data-action="confirm-reopen" data-id="${t.id}">Confirmer</button><button class="btn secondary" data-action="cancel-reopen">Annuler</button></div></div>`;
     } else if(t.status==="Closed"){
-      actions = `<div class="section-label">Ticket fermé</div><div class="btn-row"><button class="btn secondary" data-action="reopen" data-id="${t.id}">Rouvrir ce ticket</button></div>`;
+      actions=`<div class="section-label">Ticket fermé</div><div class="btn-row"><button class="btn secondary" data-action="reopen" data-id="${t.id}">Rouvrir</button></div>`;
     } else {
-      const opts = nextStatusOptions(t.status).map(s=>`<option value="${s}">${s}</option>`).join("");
-      actions = `<div class="section-label">Réponse / mise à jour</div><div class="resolve-box">
-        <div class="field"><label for="staff-comment">Commentaire</label><textarea id="staff-comment" placeholder="Analyse, action réalisée, motif de clôture…"></textarea></div>
-        <div class="field" style="max-width:260px;"><label for="staff-status">Nouveau statut</label><select id="staff-status">${opts}</select></div>
-        <div id="act-error"></div>
-        <div class="btn-row"><button class="btn" data-action="staff-update" data-id="${t.id}">Enregistrer</button></div>
-      </div>`;
+      const opts=nextStatusOptions(t.status).map(s=>`<option value="${s}">${s}</option>`).join("");
+      actions=`<div class="section-label">Réponse / mise à jour</div><div class="resolve-box"><div class="field"><label for="staff-comment">Commentaire</label><textarea id="staff-comment" placeholder="Analyse, action, motif…"></textarea></div><div class="field" style="max-width:260px;"><label for="staff-status">Nouveau statut</label><select id="staff-status">${opts}</select></div><div id="act-error"></div><div class="btn-row"><button class="btn" data-action="staff-update" data-id="${t.id}">Enregistrer</button></div></div>`;
     }
   }
-
-  let staffControls = "";
+  let staffControls="";
   if(isStaff()){
-    const prioOpts = getPriorities().map(p=>`<option value="${p}" ${t.priority===p?'selected':''}>${p}</option>`).join("");
-    staffControls = `<div class="two-col" style="margin-bottom:20px;">
-      <div class="card"><div class="section-label">Priorité</div>
-        <div class="btn-row"><select id="prio-select" style="max-width:200px;">${prioOpts}</select>
-        <button class="btn tiny" data-action="set-priority" data-id="${t.id}">Mettre à jour</button></div>
-        <div class="hint">Toute modification est journalisée dans l'historique et l'audit.</div></div>
-      <div class="card"><div class="section-label">Affectation</div>
-        <div class="btn-row"><input type="text" id="assign-input" placeholder="e-mail de l'agent" value="${esc(t.assignedTo||'')}" style="max-width:240px;">
-        <button class="btn tiny" data-action="assign" data-id="${t.id}">Affecter</button></div></div>
+    const prioOpts=getPriorities().map(p=>`<option value="${p}" ${t.priority===p?'selected':''}>${p}</option>`).join("");
+    staffControls=`<div class="two-col" style="margin-bottom:20px;">
+      <div class="card"><div class="section-label">Priorité</div><div class="btn-row"><select id="prio-select" style="max-width:200px;">${prioOpts}</select><button class="btn tiny" data-action="set-priority" data-id="${t.id}">Mettre à jour</button></div></div>
+      <div class="card"><div class="section-label">Affectation</div><div class="btn-row"><input type="text" id="assign-input" placeholder="nom de l'agent" value="${esc(t.assignee?t.assignee.full_name||'':'')}" style="max-width:240px;"><button class="btn tiny" data-action="assign" data-id="${t.id}">Affecter</button></div><div class="hint">Phase 1 : saisie libre (affectation par identité Supabase à venir).</div></div>
     </div>`;
   }
-
-  return `<div class="detail-header">
-      <div><span class="ticket-id">${t.id}</span><h2>${esc(t.subject)}</h2>
-        <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;">
-          <span class="badge svc">${esc(t.service)}</span>${win}<span>Demandeur : ${esc(t.requesterName||t.requesterEmail)}</span>${assigned}<span>Créé le ${fmtDate(t.createdAt)}</span></div>
-      </div>
-      <div style="display:flex;gap:8px;align-items:center;"><span class="badge priority-${t.priority}">${esc(t.priority)}</span><span class="badge ${statusClass(t.status)}">${esc(t.status)}</span>${overdue?`<span class="badge overdue">⚠ En retard</span>`:""}</div>
-    </div>
+  return `<div class="detail-header"><div><span class="ticket-id">${esc(t.ticket_no||"")}</span><h2>${esc(t.subject)}</h2>
+      <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;"><span class="badge svc">${esc(t.service)}</span>${win}<span>Demandeur : ${esc(reqName(t))}</span>${assigned}<span>Créé le ${fmtDate(t.created_at)}</span></div></div>
+      <div style="display:flex;gap:8px;align-items:center;"><span class="badge priority-${t.priority}">${esc(t.priority)}</span><span class="badge ${statusClass(t.status)}">${esc(t.status)}</span>${overdue?`<span class="badge overdue">⚠ En retard</span>`:""}</div></div>
     ${renderStepper(t.status)}
-    ${reopenBanner}
+    ${t.status==="Reopened"?`<div class="reopen-banner">🔁 Ticket rouvert.</div>`:""}
     ${staffControls}
-    <div class="section-label">Description</div>
-    <div class="desc-box">${esc(t.description)}</div>
-    <div class="section-label">Historique</div>
-    <div class="thread">${history}</div>
+    <div class="section-label">Description</div><div class="desc-box">${esc(t.description)}</div>
+    <div class="section-label">Historique</div><div class="thread">${history||'<div class="empty-state">Chargement…</div>'}</div>
     ${actions}`;
-}
-function nextStatusOptions(cur){
-  switch(cur){
-    case "Pending": return ["In Progress","Testing","Closed"];
-    case "In Progress": return ["Testing","Closed"];
-    case "Testing": return ["In Progress","Closed"];
-    case "Reopened": return ["In Progress","Testing","Closed"];
-    default: return [];
-  }
 }
 
 // =========================== USERS (admin) ===========================
 function renderUsers(){
-  if(!state.adminUsers.length && !state.adminUsersError){
-    apiGet({type:"users", token:state.session.token}).then(list=>{ state.adminUsers=list; render(); }).catch(e=>{ state.adminUsersError=e.message||String(e); render(); });
-  }
-  const roleOpts = [["user","Utilisateur"],["super","Super User"],["admin","Admin"]].map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
-  const superCount = state.adminUsers.filter(u=>u.role==="super").length;
+  if(!state.usersLoaded){ loadUsers(); }
   let list;
-  if(state.adminUsersError) list=`<div class="error-msg">${esc(state.adminUsersError)}</div>`;
-  else if(!state.adminUsers.length) list=`<div class="empty-state">Chargement…</div>`;
+  if(!state.usersLoaded) list=`<div class="empty-state">Chargement…</div>`;
+  else if(!state.adminUsers.length) list=`<div class="empty-state">Aucun utilisateur.</div>`;
   else list=`<div class="ticket-list">${state.adminUsers.map(u=>{
-    const active = String(u.active).toUpperCase()!=="FALSE";
-    return `<div class="ticket-row" style="border-left-color:${active?'var(--brand-2)':'var(--critical)'};cursor:default;">
-      <div class="col-main"><div class="subject">${esc(u.name||"(sans nom)")} <span class="badge svc">${ROLE_LABEL[u.role]||u.role}</span> ${active?"":'<span class="badge priority-Critical">Désactivé</span>'}</div>
-        <div class="meta"><span class="ticket-id">${esc(u.email)}</span></div></div>
-      <div class="col-status" style="align-items:flex-end;gap:6px;">
-        <div class="btn-row">
-          <button class="btn tiny secondary" data-action="reset-pw" data-email="${esc(u.email)}">Réinit. MDP</button>
-          <button class="btn tiny secondary" data-action="toggle-active" data-email="${esc(u.email)}" data-active="${active?'0':'1'}">${active?'Désactiver':'Activer'}</button>
-          <button class="btn tiny danger" data-action="del-user" data-email="${esc(u.email)}">Supprimer</button>
-        </div>
-        <select data-action="change-role" data-email="${esc(u.email)}" style="font-size:12px;padding:5px 8px;">
-          ${[["user","Utilisateur"],["super","Super User"],["admin","Admin"]].map(([v,l])=>`<option value="${v}" ${u.role===v?'selected':''}>${l}</option>`).join("")}
-        </select>
-      </div></div>`;
+    const active=u.is_active!==false;
+    const roleOpts=state.roles.map(r=>`<option value="${r.id}" ${u.role_id===r.id?'selected':''}>${ROLE_LABEL[r.name]||r.name}</option>`).join("");
+    return `<div class="ticket-row" style="cursor:default;border-left-color:${active?'var(--brand-2)':'var(--critical)'};">
+      <div class="col-main"><div class="subject">${esc(u.full_name||"(sans nom)")} ${active?"":'<span class="badge priority-Critical">Désactivé</span>'}</div><div class="meta"><span class="ticket-id">${esc(u.email)}</span></div></div>
+      <div class="col-status" style="align-items:flex-end;gap:6px;"><div class="btn-row">
+        <select data-action="change-role" data-id="${u.id}" style="font-size:12px;padding:5px 8px;">${roleOpts}</select>
+        <button class="btn tiny secondary" data-action="toggle-active" data-id="${u.id}" data-active="${active?'0':'1'}">${active?'Désactiver':'Activer'}</button>
+      </div></div></div>`;
   }).join("")}</div>`;
-
   return `<h1 class="page-title">Utilisateurs</h1>
-    <p class="page-sub">Comptes créés uniquement par l'administrateur. L'identifiant de connexion est l'adresse e-mail. Super Users : ${superCount}/10.</p>
-    <div class="card" style="margin-bottom:20px;">
-      <div class="section-label">Créer un utilisateur</div>
-      <div class="field-row">
-        <div class="field"><label for="nu-name">Nom complet</label><input type="text" id="nu-name" placeholder="K. Mballa"></div>
-        <div class="field"><label for="nu-email">Adresse e-mail (identifiant)</label><input type="text" id="nu-email" placeholder="prenom.nom@medlog.com"></div>
-      </div>
-      <div class="field-row">
-        <div class="field"><label for="nu-password">Mot de passe</label><input type="password" id="nu-password" placeholder="6 caractères minimum"></div>
-        <div class="field"><label for="nu-role">Rôle</label><select id="nu-role">${roleOpts}</select></div>
-      </div>
-      <div id="user-form-error"></div>
-      <button class="btn" data-action="create-user">Créer l'utilisateur</button>
-      <div class="hint">Le compte est créé avec « changement de mot de passe obligatoire » à la première connexion. Pour le mur d'écran, créez « ${MONITOR_EMAIL} » en Super User.</div>
+    <p class="page-sub">Attribution des rôles. La <strong>création</strong> de comptes se fait dans Supabase (Authentication → Add user), puis le rôle est attribué ici.</p>
+    <div class="card" style="margin-bottom:18px;"><div class="section-label">Créer un compte</div>
+      <div class="hint" style="font-size:13px;color:var(--ink-soft);">Dans le tableau de bord Supabase → <strong>Authentication → Users → Add user</strong> (cochez « Auto Confirm »). Le profil apparaît ici automatiquement ; attribuez-lui ensuite son rôle ci-dessous.</div>
     </div>
     <div class="section-label">Comptes existants</div>${list}`;
 }
-
-// =========================== MAINTENANCE (admin) — Phase 1 ===========================
-function loadMaint(){
-  Promise.all([
-    apiGet({type:"announcements", token:state.session.token}),
-    apiGet({type:"lookups", token:state.session.token})
-  ]).then(([an,lk])=>{ state.adminAnnouncements=an; state.adminLookups=lk; state.maintLoaded=true; render(); })
-   .catch(e=>{ state.maintError=e.message||String(e); state.maintLoaded=true; render(); });
+async function loadUsers(){
+  try{
+    const [u, r] = await Promise.all([
+      sb.from("profiles").select("*, role:roles(name)").order("created_at"),
+      sb.from("roles").select("*").eq("is_active",true).order("name")
+    ]);
+    state.adminUsers=u.data||[]; state.roles=r.data||[]; state.usersLoaded=true; render();
+  }catch(e){ state.adminUsers=[]; state.usersLoaded=true; render(); }
 }
+
+// =========================== MAINTENANCE (admin) ===========================
 function renderMaintenance(){
-  if(!state.maintLoaded && !state.maintError){ loadMaint(); }
-  const sub = `<div class="subnav">
+  const sub=`<div class="subnav">
     <button data-action="maint-subview" data-view="annonces" class="${state.maintSubview==='annonces'?'active':''}">Annonces</button>
     <button data-action="maint-subview" data-view="dictionnaire" class="${state.maintSubview==='dictionnaire'?'active':''}">Dictionnaire de données</button>
   </div>`;
-  let body;
-  if(state.maintError) body=`<div class="error-msg">${esc(state.maintError)}</div>`;
-  else if(!state.maintLoaded) body=`<div class="empty-state">Chargement…</div>`;
-  else body = state.maintSubview==="dictionnaire" ? maintDictionnaire() : maintAnnonces();
-  return `<h1 class="page-title">Maintenance</h1>
-    <p class="page-sub">Centre d'administration : annonces du tableau de bord et listes configurables.</p>
-    ${sub}${body}`;
+  const body = state.maintSubview==="dictionnaire" ? maintDictionnaire() : maintAnnonces();
+  return `<h1 class="page-title">Maintenance</h1><p class="page-sub">Annonces du tableau de bord et listes configurables.</p>${sub}${body}`;
 }
-
 function maintAnnonces(){
-  const list = state.adminAnnouncements||[];
-  const rows = list.map(a=>{
-    const active = String(a.active).toUpperCase()!=="FALSE";
-    return `<div class="ticket-row" style="cursor:default;border-left-color:${active?'var(--brand-2)':'var(--ink-faint)'};">
-      <div class="col-main"><div class="subject">${esc(a.title)} ${active?'<span class="badge closed">Active</span>':'<span class="badge priority-Medium">Inactive</span>'}</div>
-        <div class="meta"><span>${esc(a.body||"")}</span></div>
-        <div class="meta"><span class="ticket-id">${esc(a.author||"")}</span><span>${a.publish_date?new Date(Number(a.publish_date)).toLocaleDateString("fr-FR"):""}</span><span class="badge svc">${esc(a.category||"Général")}</span></div>
-      </div>
-      <div class="col-status" style="align-items:flex-end;gap:6px;"><div class="btn-row">
-        <button class="btn tiny secondary" data-action="toggle-announcement" data-id="${esc(a.id)}" data-active="${active?'0':'1'}">${active?'Désactiver':'Activer'}</button>
-        <button class="btn tiny danger" data-action="del-announcement" data-id="${esc(a.id)}">Supprimer</button>
-      </div></div></div>`;
-  }).join("");
-  return `<div class="card" style="margin-bottom:20px;">
-      <div class="section-label">Publier une annonce</div>
+  const list=state.announcements;
+  const rows=list.map(a=>`<div class="ticket-row" style="cursor:default;border-left-color:var(--brand-2);">
+      <div class="col-main"><div class="subject">${esc(a.title)} <span class="badge closed">Active</span></div><div class="meta"><span>${esc(a.body||"")}</span></div><div class="meta"><span class="ticket-id">${esc(a.author?a.author.full_name:"")}</span><span>${a.publish_date?new Date(a.publish_date).toLocaleDateString("fr-FR"):""}</span></div></div>
+      <div class="col-status"><div class="btn-row"><button class="btn tiny secondary" data-action="toggle-announcement" data-id="${a.id}">Désactiver</button><button class="btn tiny danger" data-action="del-announcement" data-id="${a.id}">Supprimer</button></div></div></div>`).join("");
+  return `<div class="card" style="margin-bottom:20px;"><div class="section-label">Publier une annonce</div>
       <div class="field"><label for="an-title">Titre</label><input type="text" id="an-title" placeholder="Ex : Maintenance MEDLOGIX samedi"></div>
-      <div class="field"><label for="an-body">Texte (peut être long)</label><textarea id="an-body" placeholder="Message diffusé à tous sur le tableau de bord."></textarea></div>
-      <div class="field-row">
-        <div class="field"><label for="an-cat">Catégorie</label><input type="text" id="an-cat" placeholder="Général / Maintenance / Sécurité…" value="Général"></div>
-        <div class="field" style="display:flex;align-items:center;gap:8px;margin-top:24px;"><input type="checkbox" id="an-scroll" checked style="width:auto;"> <label for="an-scroll" style="margin:0;">Faire défiler dans le bandeau</label></div>
-      </div>
-      <div id="an-error"></div>
-      <button class="btn" data-action="create-announcement">Publier</button>
-      <div class="hint">Les annonces actives apparaissent dans le bandeau défilant en tête du tableau de bord.</div>
-    </div>
-    <div class="section-label">Annonces existantes</div>
-    ${list.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucune annonce.</div>`}`;
+      <div class="field"><label for="an-body">Texte</label><textarea id="an-body" placeholder="Message diffusé à tous."></textarea></div>
+      <div class="field"><label for="an-cat">Catégorie</label><input type="text" id="an-cat" value="Général"></div>
+      <div id="an-error"></div><button class="btn" data-action="create-announcement">Publier</button></div>
+    <div class="section-label">Annonces actives</div>${list.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucune annonce active.</div>`}`;
 }
-
 function maintDictionnaire(){
-  const types = [["service","Services"],["priority","Priorités"]];
-  const typeBtns = types.map(([v,l])=>`<button class="btn tiny ${state.lookupType===v?'':'secondary'}" data-action="lookup-type" data-type="${v}">${l}</button>`).join(" ");
-  const items = (state.adminLookups||[]).filter(l=>l.type===state.lookupType).sort((a,b)=>(Number(a.sort)||0)-(Number(b.sort)||0));
-  const rows = items.map(l=>{
-    const active = String(l.active).toUpperCase()!=="FALSE";
-    return `<div class="ticket-row" style="cursor:default;border-left-color:${active?'var(--brand-2)':'var(--ink-faint)'};">
-      <div class="col-main"><div class="subject">${esc(l.value)} ${active?"":'<span class="badge priority-Medium">Inactive</span>'}</div></div>
-      <div class="col-status" style="align-items:flex-end;gap:6px;"><div class="btn-row">
-        <button class="btn tiny secondary" data-action="toggle-lookup" data-id="${esc(l.id)}" data-active="${active?'0':'1'}">${active?'Désactiver':'Activer'}</button>
-        <button class="btn tiny danger" data-action="del-lookup" data-id="${esc(l.id)}">Supprimer</button>
-      </div></div></div>`;
-  }).join("");
-  return `<div class="card" style="margin-bottom:16px;"><div class="section-label">Liste à gérer</div>
-      <div class="btn-row">${typeBtns}</div>
-      <div class="hint">Les statuts du workflow (Pending → In Progress → Testing → Closed / Reopened) restent fixes : ce sont des étapes de processus, pas une simple liste.</div>
-    </div>
-    <div class="card" style="margin-bottom:20px;">
-      <div class="section-label">Ajouter une valeur</div>
-      <div class="btn-row"><input type="text" id="lk-value" placeholder="Nouvelle valeur" style="max-width:380px;">
-      <button class="btn" data-action="create-lookup">Ajouter</button></div>
-      <div id="lk-error"></div>
-    </div>
-    <div class="section-label">Valeurs existantes — ${state.lookupType==='service'?'Services':'Priorités'}</div>
-    ${items.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucune valeur.</div>`}`;
-}
-
-// =========================== AUDIT (admin) ===========================
-function renderAudit(){
-  if(!state.auditLog.length && !state.auditError){
-    apiGet({type:"audit", token:state.session.token}).then(rows=>{ state.auditLog=rows; render(); }).catch(e=>{ state.auditError=e.message||String(e); render(); });
-  }
-  let body;
-  if(state.auditError) body=`<div class="error-msg">${esc(state.auditError)}</div>`;
-  else if(!state.auditLog.length) body=`<div class="empty-state">Chargement du journal…</div>`;
-  else body=`<div class="card" style="overflow-x:auto;"><table class="audit"><thead><tr><th>Date</th><th>Utilisateur</th><th>Action</th><th>Cible</th><th>Ancienne valeur</th><th>Nouvelle valeur</th></tr></thead>
-    <tbody>${state.auditLog.map(a=>`<tr><td>${fmtDate(a.timestamp)}</td><td>${esc(a.user)}</td><td>${esc(a.action)}</td><td class="ticket-id">${esc(a.target)}</td><td>${esc(a.oldValue)}</td><td>${esc(a.newValue)}</td></tr>`).join("")}</tbody></table></div>`;
-  return `<h1 class="page-title">Journal d'audit</h1><p class="page-sub">Traçabilité complète des actions (500 dernières).</p>${body}`;
+  const types=[["service","Services"],["priority","Priorités"]];
+  const typeBtns=types.map(([v,l])=>`<button class="btn tiny ${state.lookupType===v?'':'secondary'}" data-action="lookup-type" data-type="${v}">${l}</button>`).join(" ");
+  const items=state.lookups.filter(l=>l.type===state.lookupType).sort((a,b)=>(a.sort_order||0)-(b.sort_order||0));
+  const rows=items.map(l=>`<div class="ticket-row" style="cursor:default;border-left-color:var(--brand-2);"><div class="col-main"><div class="subject">${esc(l.value)}</div></div><div class="col-status"><div class="btn-row"><button class="btn tiny danger" data-action="del-lookup" data-id="${l.id}">Supprimer</button></div></div></div>`).join("");
+  return `<div class="card" style="margin-bottom:16px;"><div class="section-label">Liste à gérer</div><div class="btn-row">${typeBtns}</div>
+      <div class="hint">Les statuts du workflow (Pending → In Progress → Testing → Closed / Reopened) restent fixes.</div></div>
+    <div class="card" style="margin-bottom:20px;"><div class="section-label">Ajouter une valeur</div><div class="btn-row"><input type="text" id="lk-value" placeholder="Nouvelle valeur" style="max-width:380px;"><button class="btn" data-action="create-lookup">Ajouter</button></div><div id="lk-error"></div></div>
+    <div class="section-label">Valeurs — ${state.lookupType==='service'?'Services':'Priorités'}</div>${items.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucune valeur.</div>`}`;
 }
 
 // =========================== EVENTS ===========================
 function bindEvents(){
-  document.querySelectorAll("[data-action]").forEach(el=>{
-    const ev = el.dataset.action==="change-role" ? "change" : "click";
-    el.addEventListener(ev, onAction);
-  });
-  const wire=(id,fn)=>{ const e=document.getElementById(id); if(e) e.addEventListener("change",fn); };
+  document.querySelectorAll("[data-action]").forEach(el=>{ el.addEventListener(el.dataset.action==="change-role"?"change":"click", onAction); });
+  const wire=(id,fn)=>{const e=document.getElementById(id); if(e) e.addEventListener("change",fn);};
   wire("f-status",e=>{state.filter.status=e.target.value; render();});
   wire("f-service",e=>{state.filter.service=e.target.value; render();});
   wire("f-priority",e=>{state.filter.priority=e.target.value; render();});
@@ -1086,57 +541,27 @@ function bindEvents(){
 }
 
 async function onAction(e){
-  const el = e.currentTarget; const action = el.dataset.action;
-  const busy=(txt)=>{ el.disabled=true; if(el.tagName==="BUTTON"){ el.dataset._t=el.textContent; el.textContent=txt; } };
+  const el=e.currentTarget, action=el.dataset.action;
+  const busy=t=>{ el.disabled=true; if(el.tagName==="BUTTON"){ el.dataset._t=el.textContent; el.textContent=t; } };
   const unbusy=()=>{ el.disabled=false; if(el.dataset._t) el.textContent=el.dataset._t; };
 
-  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; if(el.dataset.view==="users"){state.adminUsers=[];state.adminUsersError="";} if(el.dataset.view==="audit"){state.auditLog=[];state.auditError="";} if(el.dataset.view==="maintenance"){state.maintLoaded=false;state.maintError="";} render(); return; }
-  if(action==="mon-nav"){ state.view=el.dataset.view; render(); return; }
-  if(action==="refresh-now"){ busy("…"); try{ await refreshTickets(); state.lastSync=Date.now(); state.monStale=false; }catch(err){ state.monStale=true; } render(); return; }
-  if(action==="fullscreen"){ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(err){} return; }
-  if(action==="print-report"){ window.print(); return; }
-  if(action==="export-medlogix"){ exportCSV(t=>t.service==="MEDLOGIX","medlog_medlogix_export.csv"); return; }
-  if(action==="logout"){ state.session=null; localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(SESS_KEY); localStorage.removeItem(MON_CREDS_KEY); state.view="dashboard"; render(); return; }
-  if(action==="retry"){ state.loadError=""; state.booting=true; boot(); return; }
+  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; state.staffNew=false; if(el.dataset.view==="users"){state.usersLoaded=false;} render(); return; }
+  if(action==="logout"){ await sb.auth.signOut(); state.session=null; state.profile=null; state.view="dashboard"; render(); return; }
+  if(action==="retry"){ state.booting=true; render(); await afterLogin(); return; }
+  if(action==="goto-new"){ state.view="tickets"; state.selectedTicketId=null; state.staffNew=true; if(!state.newService) state.newService=getServices()[0]; render(); return; }
+  if(action==="staff-new-cancel"){ state.staffNew=false; render(); return; }
 
   if(action==="login"){
-    const email=document.getElementById("login-email").value.trim().toLowerCase();
+    const email=document.getElementById("login-email").value.trim();
     const password=document.getElementById("login-password").value;
     if(!email||!password){ state.loginError="Saisissez votre e-mail et votre mot de passe."; render(); return; }
     busy("Connexion…");
-    try{
-      const r = await apiPost({action:"login", email, password});
-      state.session = { token:r.token, email:r.email, name:r.name, role:r.role };
-      localStorage.setItem(TOKEN_KEY, r.token);
-      localStorage.setItem(SESS_KEY, JSON.stringify({email:r.email,name:r.name,role:r.role}));
-      localStorage.setItem(EMAIL_KEY, email);
-      if(isMonitor()){ try{ localStorage.setItem(MON_CREDS_KEY, JSON.stringify({email, password})); }catch(e){} }
-      state.loginError=""; state.mustChangePassword=!!r.mustChangePassword;
-      if(!state.mustChangePassword){ await refreshTickets(); state.lastSync=Date.now(); await loadMeta(); }
-      state.view = isMonitor() ? "monitor" : "dashboard";
-      if(!isMonitor() && state.deepLinkTicket){ state.view="tickets"; state.selectedTicketId=state.deepLinkTicket; }
-      render();
-    }catch(err){ state.loginError=err.message||String(err); render(); }
-    return;
+    const { data, error } = await sb.auth.signInWithPassword({ email, password });
+    if(error){ state.loginError=error.message; render(); return; }
+    state.session=data.session; state.loginError=""; state.booting=true; render(); await afterLogin(); return;
   }
 
-  if(action==="do-change-password"){
-    const p1=document.getElementById("np1").value, p2=document.getElementById("np2").value;
-    if(p1.length<6){ state.pwChangeError="6 caractères minimum."; render(); return; }
-    if(p1!==p2){ state.pwChangeError="Les deux mots de passe ne correspondent pas."; render(); return; }
-    busy("Enregistrement…");
-    try{
-      await apiPost({action:"changePassword", token:state.session.token, newPassword:p1});
-      state.mustChangePassword=false; state.pwChangeError="";
-      await refreshTickets(); state.lastSync=Date.now(); await loadMeta();
-      state.view = isMonitor() ? "monitor" : "dashboard";
-      render();
-    }catch(err){ state.pwChangeError=err.message||String(err); render(); }
-    return;
-  }
-
-  if(action==="user-subview"){ state.userSubview=el.dataset.view; state.selectedTicketId=null; render(); return; }
-  if(action==="open-ticket"){ state.selectedTicketId=el.dataset.id; state.reopening=false; render(); return; }
+  if(action==="open-ticket"){ state.selectedTicketId=el.dataset.id; state.reopening=false; state.ticketActivity=[]; render(); await loadActivity(el.dataset.id); return; }
   if(action==="back"){ state.selectedTicketId=null; state.reopening=false; render(); return; }
   if(action==="reopen"){ state.reopening=true; render(); return; }
   if(action==="cancel-reopen"){ state.reopening=false; render(); return; }
@@ -1145,184 +570,102 @@ async function onAction(e){
     const service=document.getElementById("t-service").value;
     const priority=document.getElementById("t-priority").value;
     const subject=document.getElementById("t-subject").value.trim();
-    const desc=document.getElementById("t-desc").value.trim();
+    const description=document.getElementById("t-desc").value.trim();
     const errBox=document.getElementById("form-error");
-    if(!subject||!desc){ errBox.innerHTML=`<div class="error-msg">Le sujet et la description sont obligatoires.</div>`; return; }
-    const ticket={ service, priority, subject, description:desc, module:"", window:"" };
-    if(service==="MEDLOGIX"){ ticket.module=document.getElementById("t-module").value; ticket.window=document.getElementById("t-window").value; }
+    if(!subject||!description){ errBox.innerHTML=`<div class="error-msg">Sujet et description obligatoires.</div>`; return; }
+    const row={ service, priority, subject, description, requester_id:uid(), status:"Pending" };
+    if(service==="MEDLOGIX"){ row.module=document.getElementById("t-module").value; row.screen=document.getElementById("t-screen").value; }
     busy("Envoi…");
-    try{ await apiPost({action:"createTicket", token:state.session.token, ticket}); await refreshTickets(); state.userSubview="mine"; render(); }
-    catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); }
-    return;
+    const { data:ins, error } = await sb.from("tickets").insert(row).select().single();
+    if(error){ errBox.innerHTML=`<div class="error-msg">${esc(error.message)}</div>`; unbusy(); return; }
+    await sb.from("ticket_activity").insert({ ticket_id:ins.id, actor_id:uid(), type:"create" });
+    await reloadTickets(); state.view="tickets"; state.selectedTicketId=null; state.staffNew=false; render(); return;
   }
 
-  if(action==="user-comment"){
-    const comment=document.getElementById("user-comment").value.trim();
-    const errBox=document.getElementById("act-error");
-    if(!comment){ errBox.innerHTML=`<div class="error-msg">Commentaire vide.</div>`; return; }
-    busy("Envoi…");
-    try{ await apiPost({action:"addComment", token:state.session.token, id:el.dataset.id, comment}); await refreshTickets(); render(); }
-    catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); }
-    return;
-  }
-
-  if(action==="staff-update"){
-    const comment=document.getElementById("staff-comment").value.trim();
-    const status=document.getElementById("staff-status").value;
-    const errBox=document.getElementById("act-error");
-    if(!comment){ errBox.innerHTML=`<div class="error-msg">Un commentaire est requis.</div>`; return; }
+  if(action==="user-comment"||action==="staff-update"||action==="confirm-reopen"){
+    const id=el.dataset.id; const errBox=document.getElementById("act-error");
+    const commentEl=document.getElementById(action==="user-comment"?"user-comment":"staff-comment");
+    const comment=commentEl?commentEl.value.trim():"";
+    if((action==="staff-update"||action==="confirm-reopen") && !comment){ errBox.innerHTML=`<div class="error-msg">Un commentaire est requis.</div>`; return; }
+    if(action==="user-comment" && !comment){ errBox.innerHTML=`<div class="error-msg">Commentaire vide.</div>`; return; }
     busy("Enregistrement…");
-    try{ await apiPost({action:"updateStatus", token:state.session.token, id:el.dataset.id, status, comment}); await refreshTickets(); render(); }
-    catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); }
+    try{
+      if(action==="user-comment"){ await sb.from("ticket_activity").insert({ticket_id:id, actor_id:uid(), type:"comment", comment}); }
+      else if(action==="staff-update"){
+        const status=document.getElementById("staff-status").value; const old=getTicket(id).status;
+        await sb.from("tickets").update({ status, closed_at: status==="Closed"?new Date().toISOString():null }).eq("id",id);
+        await sb.from("ticket_activity").insert({ticket_id:id, actor_id:uid(), type:"status", from_value:old, to_value:status, comment});
+      } else {
+        const old=getTicket(id).status;
+        await sb.from("tickets").update({ status:"Reopened", closed_at:null }).eq("id",id);
+        await sb.from("ticket_activity").insert({ticket_id:id, actor_id:uid(), type:"reopen", from_value:old, to_value:"Reopened", comment});
+        state.reopening=false;
+      }
+      await reloadTickets(); await loadActivity(id); render();
+    }catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); }
     return;
   }
-
-  if(action==="confirm-reopen"){
-    const comment=document.getElementById("staff-comment").value.trim();
-    const errBox=document.getElementById("act-error");
-    if(!comment){ errBox.innerHTML=`<div class="error-msg">Un motif est requis.</div>`; return; }
-    busy("Enregistrement…");
-    try{ await apiPost({action:"reopenTicket", token:state.session.token, id:el.dataset.id, comment}); await refreshTickets(); state.reopening=false; render(); }
-    catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); }
-    return;
-  }
-
   if(action==="set-priority"){
-    const priority=document.getElementById("prio-select").value;
+    const id=el.dataset.id, priority=document.getElementById("prio-select").value, old=getTicket(id).priority;
     busy("…");
-    try{ await apiPost({action:"updatePriority", token:state.session.token, id:el.dataset.id, priority}); await refreshTickets(); render(); }
-    catch(err){ alert(err.message||String(err)); unbusy(); }
-    return;
+    try{ await sb.from("tickets").update({priority}).eq("id",id); await sb.from("ticket_activity").insert({ticket_id:id, actor_id:uid(), type:"priority", from_value:old, to_value:priority}); await reloadTickets(); await loadActivity(id); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); } return;
   }
-
   if(action==="assign"){
-    const assignee=document.getElementById("assign-input").value.trim();
+    const id=el.dataset.id, name=document.getElementById("assign-input").value.trim();
     busy("…");
-    try{ await apiPost({action:"assignTicket", token:state.session.token, id:el.dataset.id, assignee}); await refreshTickets(); render(); }
-    catch(err){ alert(err.message||String(err)); unbusy(); }
-    return;
+    try{ await sb.from("ticket_activity").insert({ticket_id:id, actor_id:uid(), type:"assign", to_value:name}); await loadActivity(id); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); } return;
   }
 
-  if(action==="export-csv"){ exportCSV(null,"medlog_tickets_export.csv"); return; }
-
-  // ---- Maintenance : annonces & dictionnaire ----
+  // ---- Maintenance ----
   if(action==="maint-subview"){ state.maintSubview=el.dataset.view; render(); return; }
   if(action==="lookup-type"){ state.lookupType=el.dataset.type; render(); return; }
-
   if(action==="create-announcement"){
     const title=document.getElementById("an-title").value.trim();
     const body=document.getElementById("an-body").value.trim();
     const category=document.getElementById("an-cat").value.trim()||"Général";
-    const scroll=document.getElementById("an-scroll").checked;
     const errBox=document.getElementById("an-error");
-    if(!title){ errBox.innerHTML=`<div class="error-msg">Le titre est obligatoire.</div>`; return; }
+    if(!title){ errBox.innerHTML=`<div class="error-msg">Titre obligatoire.</div>`; return; }
     busy("Publication…");
-    try{ await apiPost({action:"createAnnouncement", token:state.session.token, title, body, category, scroll});
-      state.adminAnnouncements=await apiGet({type:"announcements", token:state.session.token}); await loadMeta(); render(); }
-    catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); }
-    return;
+    const { error } = await sb.from("announcements").insert({ title, body, category, author_id:uid(), is_active:true, scroll:true });
+    if(error){ errBox.innerHTML=`<div class="error-msg">${esc(error.message)}</div>`; unbusy(); return; }
+    state.announcements=await fetchAnnouncements(); render(); return;
   }
-  if(action==="toggle-announcement"){
-    const id=el.dataset.id, active=el.dataset.active==="1";
-    busy("…");
-    try{ await apiPost({action:"updateAnnouncement", token:state.session.token, id, fields:{active}});
-      state.adminAnnouncements=await apiGet({type:"announcements", token:state.session.token}); await loadMeta(); render(); }
-    catch(err){ alert(err.message||String(err)); unbusy(); }
-    return;
-  }
-  if(action==="del-announcement"){
-    const id=el.dataset.id;
-    if(!confirm("Supprimer cette annonce ?")) return;
-    busy("…");
-    try{ await apiPost({action:"deleteAnnouncement", token:state.session.token, id});
-      state.adminAnnouncements=await apiGet({type:"announcements", token:state.session.token}); await loadMeta(); render(); }
-    catch(err){ alert(err.message||String(err)); unbusy(); }
-    return;
-  }
+  if(action==="toggle-announcement"){ busy("…"); await sb.from("announcements").update({is_active:false}).eq("id",el.dataset.id); state.announcements=await fetchAnnouncements(); render(); return; }
+  if(action==="del-announcement"){ if(!confirm("Supprimer cette annonce ?")) return; busy("…"); await sb.from("announcements").delete().eq("id",el.dataset.id); state.announcements=await fetchAnnouncements(); render(); return; }
   if(action==="create-lookup"){
-    const value=document.getElementById("lk-value").value.trim();
-    const errBox=document.getElementById("lk-error");
+    const value=document.getElementById("lk-value").value.trim(); const errBox=document.getElementById("lk-error");
     if(!value){ errBox.innerHTML=`<div class="error-msg">Saisissez une valeur.</div>`; return; }
     busy("Ajout…");
-    try{ await apiPost({action:"createLookup", token:state.session.token, type:state.lookupType, value, label:value, sort:(state.adminLookups||[]).filter(l=>l.type===state.lookupType).length+1});
-      state.adminLookups=await apiGet({type:"lookups", token:state.session.token}); await loadMeta(); render(); }
-    catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); }
-    return;
+    const sort=state.lookups.filter(l=>l.type===state.lookupType).length+1;
+    const { error } = await sb.from("lookups").insert({ type:state.lookupType, value, label:value, sort_order:sort, is_active:true });
+    if(error){ errBox.innerHTML=`<div class="error-msg">${esc(error.message)}</div>`; unbusy(); return; }
+    state.lookups=await fetchLookups(); render(); return;
   }
-  if(action==="toggle-lookup"){
-    const id=el.dataset.id, active=el.dataset.active==="1";
-    busy("…");
-    try{ await apiPost({action:"updateLookup", token:state.session.token, id, fields:{active}});
-      state.adminLookups=await apiGet({type:"lookups", token:state.session.token}); await loadMeta(); render(); }
-    catch(err){ alert(err.message||String(err)); unbusy(); }
-    return;
-  }
-  if(action==="del-lookup"){
-    const id=el.dataset.id;
-    if(!confirm("Supprimer cette valeur ?")) return;
-    busy("…");
-    try{ await apiPost({action:"deleteLookup", token:state.session.token, id});
-      state.adminLookups=await apiGet({type:"lookups", token:state.session.token}); await loadMeta(); render(); }
-    catch(err){ alert(err.message||String(err)); unbusy(); }
-    return;
-  }
+  if(action==="del-lookup"){ if(!confirm("Supprimer cette valeur ?")) return; busy("…"); await sb.from("lookups").delete().eq("id",el.dataset.id); state.lookups=await fetchLookups(); render(); return; }
 
-  if(action==="create-user"){
-    const name=document.getElementById("nu-name").value.trim();
-    const email=document.getElementById("nu-email").value.trim().toLowerCase();
-    const password=document.getElementById("nu-password").value;
-    const role=document.getElementById("nu-role").value;
-    const errBox=document.getElementById("user-form-error");
-    busy("Création…");
-    try{ await apiPost({action:"createUser", token:state.session.token, name, email, password, role}); state.adminUsers=await apiGet({type:"users", token:state.session.token}); render(); }
-    catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); }
-    return;
-  }
+  // ---- Users ----
   if(action==="change-role"){
-    const email=el.dataset.email, role=el.value;
-    try{ await apiPost({action:"setUserRole", token:state.session.token, email, role}); state.adminUsers=await apiGet({type:"users", token:state.session.token}); render(); }
-    catch(err){ alert(err.message||String(err)); render(); }
-    return;
-  }
-  if(action==="reset-pw"){
-    const email=el.dataset.email;
-    const np=prompt("Nouveau mot de passe pour "+email+" (6 caractères min.) :");
-    if(np===null) return;
-    try{ await apiPost({action:"resetPassword", token:state.session.token, email, newPassword:np}); alert("Mot de passe réinitialisé. L'utilisateur devra le changer à la prochaine connexion."); }
-    catch(err){ alert(err.message||String(err)); }
-    return;
+    const id=el.dataset.id, role_id=el.value;
+    try{ await sb.from("profiles").update({role_id}).eq("id",id); await loadUsers(); }
+    catch(err){ alert(err.message||String(err)); } return;
   }
   if(action==="toggle-active"){
-    const email=el.dataset.email, active=el.dataset.active==="1";
+    const id=el.dataset.id, active=el.dataset.active==="1";
     busy("…");
-    try{ await apiPost({action:"setUserActive", token:state.session.token, email, active}); state.adminUsers=await apiGet({type:"users", token:state.session.token}); render(); }
-    catch(err){ alert(err.message||String(err)); unbusy(); }
-    return;
-  }
-  if(action==="del-user"){
-    const email=el.dataset.email;
-    if(!confirm("Supprimer "+email+" ? Action irréversible.")) return;
-    busy("…");
-    try{ await apiPost({action:"deleteUser", token:state.session.token, email}); state.adminUsers=await apiGet({type:"users", token:state.session.token}); render(); }
-    catch(err){ alert(err.message||String(err)); unbusy(); }
-    return;
+    try{ await sb.from("profiles").update({is_active:active}).eq("id",id); await loadUsers(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); } return;
   }
 }
-
-function exportCSV(filterFn, filename){
-  const cols=["ID","Service","Module","Window","Priority","Subject","Requester name","Requester email","Status","Assigned","Created (local)","Days open","Last comment"];
-  const src = filterFn ? tickets.filter(filterFn) : tickets;
-  const rows=src.map(t=>{
-    const last=[...(t.history||[])].reverse().find(h=>h.type==="comment"||h.type==="status"||h.type==="reopen");
-    return [t.id,t.service,t.module||"",t.window||"",t.priority,t.subject,t.requesterName,t.requesterEmail,t.status,t.assignedTo||"",new Date(Number(t.createdAt)).toLocaleString("fr-FR"),String(daysSince(t.createdAt)),last?(last.comment||(last.from+"→"+last.to)).replace(/\n/g," "):""];
-  });
-  const csv=[cols,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
-  const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob);
-  const a=document.createElement("a"); a.href=url; a.download=filename||"export.csv"; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+async function loadActivity(id){
+  const { data } = await sb.from("ticket_activity").select("*, actor:actor_id(full_name, role:roles(name))").eq("ticket_id",id).order("created_at");
+  state.ticketActivity=data||[];
+  if(state.selectedTicketId===id) render();
 }
 
-// ---- Go ----
-boot();
+// --- Go ---
+init();
 </script>
 </body>
 </html>
