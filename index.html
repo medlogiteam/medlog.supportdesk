@@ -196,7 +196,7 @@ let state = {
   maintSubview:"annonces", lookupType:"service",
   adminUsers:[], usersLoaded:false,
   assets:[], assetCats:[], assetsLoaded:false, assetFilter:{cat:"all", status:"all", search:""},
-  selectedAssetId:null, assetNew:false
+  selectedAssetId:null, assetNew:false, assetMovements:[], profilesList:[]
 };
 
 // --- Utilitaires ---
@@ -578,16 +578,24 @@ function catName(id){ const c=state.assetCats.find(x=>x.id===id); return c?c.nam
 
 async function loadAssets(){
   try{
-    const [a, cats] = await Promise.all([
+    const [a, cats, profs] = await Promise.all([
       sb.from("assets").select("*, category:category_id(name), location:location_id(name), assigned:assigned_user_id(full_name)").order("created_at",{ascending:false}),
-      sb.from("asset_categories").select("*").order("name")
+      sb.from("asset_categories").select("*").order("name"),
+      sb.from("profiles").select("id, full_name, email").eq("is_active",true).order("full_name")
     ]);
-    state.assets=a.data||[]; state.assetCats=cats.data||[]; state.assetsLoaded=true; render();
+    state.assets=a.data||[]; state.assetCats=cats.data||[]; state.profilesList=profs.data||[]; state.assetsLoaded=true; render();
   }catch(e){ state.assets=[]; state.assetsLoaded=true; render(); }
 }
 async function reloadAssets(){
   const { data } = await sb.from("assets").select("*, category:category_id(name), location:location_id(name), assigned:assigned_user_id(full_name)").order("created_at",{ascending:false});
   state.assets=data||[];
+}
+async function loadAssetMovements(id){
+  const { data } = await sb.from("asset_movements")
+    .select("*, actor:actor_id(full_name), to_user:to_user_id(full_name), from_user:from_user_id(full_name)")
+    .eq("asset_id",id).order("created_at",{ascending:false});
+  state.assetMovements=data||[];
+  if(state.selectedAssetId===id) render();
 }
 
 function renderAssetsArea(){
@@ -655,10 +663,32 @@ function renderAssetForm(){
     </div>`;
 }
 
+function movementRow(m){
+  let txt="";
+  if(m.type==="assignment") txt=`Affecté à <strong>${esc(m.to_user?m.to_user.full_name:"—")}</strong>`;
+  else if(m.type==="return") txt=`Retour en stock${m.from_user?(" (depuis "+esc(m.from_user.full_name)+")"):""}`;
+  else if(m.type==="status_change") txt=`Statut : <strong>${esc(assetStatusLabel(m.from_status))}</strong> → <strong>${esc(assetStatusLabel(m.to_status))}</strong>`;
+  else if(m.type==="transfer") txt=`Transfert de site`;
+  else txt=esc(m.note||m.type);
+  return `<div class="thread-item"><div class="t-head"><span class="who">${esc(m.actor?m.actor.full_name:"—")}</span><span>${fmtDate(m.created_at)}</span></div><div class="t-body">${txt}${m.note?` <span style="color:var(--ink-soft);">— ${esc(m.note)}</span>`:""}</div></div>`;
+}
 function renderAssetDetail(a){
   const editable=canEditAssets();
   const statusOpts=assetStatuses().map(s=>`<option value="${esc(s)}" ${a.status===s?'selected':''}>${esc(assetStatusLabel(s))}</option>`).join("");
   const warn = a.warranty_expiry ? (new Date(a.warranty_expiry) < new Date() ? `<span class="badge overdue">Garantie expirée</span>` : "") : "";
+  const userOpts=`<option value="">— choisir un utilisateur —</option>`+state.profilesList.map(p=>`<option value="${p.id}">${esc(p.full_name||p.email)}</option>`).join("");
+  let assignCard="";
+  if(editable){
+    assignCard=`<div class="card"><div class="section-label">Affectation & statut</div>
+      ${a.assigned_user_id
+        ? `<div style="font-size:13.5px;margin-bottom:10px;">Actuellement affecté à <strong>${esc(a.assigned?a.assigned.full_name:"")}</strong></div><div class="btn-row" style="margin-bottom:14px;"><button class="btn tiny secondary" data-action="asset-return" data-id="${a.id}">Retour en stock</button></div>`
+        : `<div class="btn-row" style="margin-bottom:14px;"><select id="as-assign-user" style="max-width:240px;">${userOpts}</select><button class="btn tiny" data-action="asset-assign" data-id="${a.id}">Affecter</button></div>`}
+      <div class="section-label" style="margin-top:6px;">Changer le statut</div>
+      <div class="btn-row"><select id="as-status-upd" style="max-width:220px;">${statusOpts}</select><button class="btn tiny" data-action="asset-status" data-id="${a.id}">Appliquer</button></div>
+    </div>`;
+  }
+  const movements=(state.assetMovements||[]);
+  const historyCard=`<div class="card" style="margin-top:16px;"><div class="section-label">Historique des mouvements</div>${movements.length?`<div class="thread">${movements.map(movementRow).join("")}</div>`:`<div class="empty-state">Aucun mouvement enregistré.</div>`}</div>`;
   return `<div class="detail-header"><div><span class="ticket-id">${esc(a.asset_tag||"")}</span><h2>${esc(a.name)}</h2>
       <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;"><span class="badge svc">${esc(a.category?a.category.name:catName(a.category_id))}</span>${a.serial_no?`<span>S/N ${esc(a.serial_no)}</span>`:""}${a.location?`<span>${esc(a.location.name)}</span>`:""}${a.assigned?`<span>Affecté à ${esc(a.assigned.full_name)}</span>`:""}</div></div>
       <div style="display:flex;gap:8px;align-items:center;">${assetStatusBadge(a.status)}${warn}</div></div>
@@ -673,10 +703,9 @@ function renderAssetDetail(a){
         </div>
         ${a.notes?`<div class="desc-box" style="margin-top:12px;">${esc(a.notes)}</div>`:""}
       </div>
-      ${editable?`<div class="card"><div class="section-label">Mettre à jour le statut</div>
-        <div class="btn-row"><select id="as-status-upd" style="max-width:220px;">${statusOpts}</select><button class="btn tiny" data-action="asset-status" data-id="${a.id}">Appliquer</button></div>
-        <div class="hint">L'historique des mouvements détaillé arrivera dans la tranche suivante de la Phase 2.</div></div>`:""}
-    </div>`;
+      ${assignCard}
+    </div>
+    ${historyCard}`;
 }
 
 // =========================== MAINTENANCE (admin) ===========================
@@ -897,7 +926,7 @@ async function onAction(e){
   // ---- Assets (Phase 2) ----
   if(action==="asset-new"){ state.assetNew=true; state.selectedAssetId=null; render(); return; }
   if(action==="asset-cancel"){ state.assetNew=false; render(); return; }
-  if(action==="open-asset"){ state.selectedAssetId=el.dataset.id; render(); return; }
+  if(action==="open-asset"){ state.selectedAssetId=el.dataset.id; state.assetMovements=[]; render(); await loadAssetMovements(el.dataset.id); return; }
   if(action==="asset-back"){ state.selectedAssetId=null; render(); return; }
   if(action==="submit-asset"){
     const tag=document.getElementById("as-tag").value.trim();
@@ -917,10 +946,34 @@ async function onAction(e){
     await reloadAssets(); state.assetNew=false; render(); return;
   }
   if(action==="asset-status"){
-    const id=el.dataset.id, status=document.getElementById("as-status-upd").value;
+    const id=el.dataset.id, to_status=document.getElementById("as-status-upd").value, from_status=state.assets.find(x=>x.id===id).status;
+    if(to_status===from_status){ return; }
     busy("…");
-    try{ await sb.from("assets").update({status}).eq("id",id); await reloadAssets(); render(); }
-    catch(err){ alert(err.message||String(err)); unbusy(); } return;
+    try{
+      await sb.from("assets").update({status:to_status}).eq("id",id);
+      await sb.from("asset_movements").insert({ asset_id:id, type:"status_change", from_status, to_status, actor_id:uid() });
+      await reloadAssets(); await loadAssetMovements(id); render();
+    }catch(err){ alert(err.message||String(err)); unbusy(); } return;
+  }
+  if(action==="asset-assign"){
+    const id=el.dataset.id, to_user_id=document.getElementById("as-assign-user").value;
+    if(!to_user_id){ alert("Choisissez un utilisateur."); return; }
+    const cur=state.assets.find(x=>x.id===id);
+    busy("…");
+    try{
+      await sb.from("assets").update({ assigned_user_id:to_user_id, status:"Assigned" }).eq("id",id);
+      await sb.from("asset_movements").insert({ asset_id:id, type:"assignment", to_user_id, from_user_id:cur.assigned_user_id||null, from_status:cur.status, to_status:"Assigned", actor_id:uid() });
+      await reloadAssets(); await loadAssetMovements(id); render();
+    }catch(err){ alert(err.message||String(err)); unbusy(); } return;
+  }
+  if(action==="asset-return"){
+    const id=el.dataset.id, cur=state.assets.find(x=>x.id===id);
+    busy("…");
+    try{
+      await sb.from("assets").update({ assigned_user_id:null, status:"In Stock" }).eq("id",id);
+      await sb.from("asset_movements").insert({ asset_id:id, type:"return", from_user_id:cur.assigned_user_id||null, from_status:cur.status, to_status:"In Stock", actor_id:uid() });
+      await reloadAssets(); await loadAssetMovements(id); render();
+    }catch(err){ alert(err.message||String(err)); unbusy(); } return;
   }
 
   // ---- Maintenance ----
