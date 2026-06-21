@@ -133,6 +133,30 @@
   .announce-banner .ab-item .ab-meta{color:#bcd3e2; font-size:11.5px; margin-left:8px;}
   @keyframes ab-scroll{0%{transform:translateX(0);}100%{transform:translateX(-50%);}}
   @media (prefers-reduced-motion:reduce){.announce-banner .ab-track{animation:none; white-space:normal;}}
+  /* ===== Monitoring (mur d'écran) ===== */
+  .monitor-wrap{width:100%;}
+  .mon{background:#0b1322; color:#e7eef8; min-height:calc(100vh - 58px); padding:18px 22px;}
+  .mon-kpis{display:grid; grid-template-columns:repeat(6,1fr); gap:12px; margin-bottom:16px;}
+  @media (max-width:980px){.mon-kpis{grid-template-columns:repeat(3,1fr);}}
+  .mon-kpi{background:#131f33; border:1px solid #20304a; border-radius:12px; padding:16px 18px;}
+  .mon-kpi .n{font-family:var(--mono); font-size:36px; font-weight:800; line-height:1; color:#fff;}
+  .mon-kpi .l{font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:#90a4c2; margin-top:7px;}
+  .mon-kpi.amber .n{color:#ffb454;} .mon-kpi.blue .n{color:#5ca8ff;} .mon-kpi.violet .n{color:#b794f6;} .mon-kpi.pink .n{color:#f06fa6;} .mon-kpi.red .n{color:#ff6b6b;}
+  .mon-grid{display:grid; grid-template-columns:2fr 1fr; gap:16px;}
+  @media (max-width:980px){.mon-grid{grid-template-columns:1fr;}}
+  .mon-panel{background:#101b2e; border:1px solid #20304a; border-radius:12px; padding:14px 16px; margin-bottom:16px;}
+  .mon-panel h3{font-size:12px; text-transform:uppercase; letter-spacing:.7px; color:#9fb3d1; margin:0 0 12px;}
+  table.mon-table{width:100%; border-collapse:collapse;}
+  table.mon-table th{font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:#7e93b3; text-align:left; padding:6px 8px; border-bottom:1px solid #21304a;}
+  table.mon-table td{padding:10px 8px; border-bottom:1px solid #182539; font-size:14px; color:#d7e2f0; vertical-align:middle;}
+  .mon-id{font-family:var(--mono); font-size:12px; color:#8fb4e6;}
+  .mon-subj{font-weight:600;}
+  .mon-age{font-family:var(--mono); font-size:13px;}
+  .mon-age.over{color:#ff6b6b; font-weight:700;}
+  .mon-foot{display:flex; justify-content:space-between; color:#7e93b3; font-size:12px; margin-top:6px; flex-wrap:wrap; gap:8px;}
+  .mon-other{display:flex; gap:8px; flex-wrap:wrap;}
+  .mon-other .chip{background:#16233a; border:1px solid #223150; border-radius:20px; padding:5px 11px; font-size:12px; color:#b9cae3;}
+  @media print{ header.topbar, .no-print{display:none!important;} body{background:#fff;} main{max-width:none; padding:0;} .card{break-inside:avoid;} }
 </style>
 </head>
 <body>
@@ -210,7 +234,23 @@ function periodRange(){
 }
 function inPeriod(t){ const r=periodRange(); const ms=new Date(t.created_at).getTime(); return ms>=r.from && ms<=r.to; }
 
-function render(){ document.getElementById("app").innerHTML = renderApp(); bindEvents(); }
+function render(){ document.getElementById("app").innerHTML = renderApp(); bindEvents(); ensureMonitorTimers(); }
+
+function isMonitor(){ return roleName()==="viewer"; }
+let monDataTimer=null, monClockTimer=null;
+function ensureMonitorTimers(){
+  const on = isMonitor() && !state.booting;
+  if(on && !monDataTimer){
+    monDataTimer = setInterval(async ()=>{
+      if(!isMonitor()){ clearInterval(monDataTimer); monDataTimer=null; return; }
+      try{ await reloadTickets(); state.lastSync=Date.now(); render(); }catch(e){}
+    }, 10000);
+  }
+  if(on && !monClockTimer){
+    monClockTimer = setInterval(()=>{ const c=document.getElementById("mon-clock"); if(c) c.textContent=new Date().toLocaleTimeString("fr-FR"); }, 1000);
+  }
+  if(!on){ if(monDataTimer){clearInterval(monDataTimer);monDataTimer=null;} if(monClockTimer){clearInterval(monClockTimer);monClockTimer=null;} }
+}
 
 // --- Boot / Auth ---
 async function init(){
@@ -228,7 +268,7 @@ async function afterLogin(){
     state.loadError="";
   }catch(e){ state.loadError = e.message||String(e); }
   state.booting=false;
-  state.view = roleName()==="viewer" ? "dashboard" : "dashboard";
+  state.view = isMonitor() ? "monitor" : "dashboard";
   render();
 }
 async function loadProfile(){
@@ -259,11 +299,22 @@ async function reloadTickets(){ state.tickets = await fetchTickets(); }
 
 // =========================== RENDER ROOT ===========================
 function renderApp(){
+  if(state.profile && isMonitor() && !state.booting && !state.loadError){
+    return `${renderHeader()}<div class="monitor-wrap">${renderMain()}</div>`;
+  }
   return `${renderHeader()}<main>${renderMain()}</main><footer class="app-footer">MEDLOG IT Ops — Phase 1 (Supabase)</footer>`;
 }
 function renderHeader(){
   let nav="", session="";
-  if(state.profile){
+  if(state.profile && isMonitor()){
+    nav=`<div class="topnav">
+      <button data-action="mon-nav" data-view="monitor" class="${state.view==='monitor'?'active':''}">Monitoring</button>
+      <button data-action="mon-nav" data-view="report" class="${state.view==='report'?'active':''}">Rapport</button></div>`;
+    session=`<div class="session-info"><span id="mon-clock" class="role-chip" style="font-family:var(--mono);">${new Date().toLocaleTimeString("fr-FR")}</span>
+      <button class="link" data-action="refresh-now">actualiser</button>
+      <button class="link" data-action="fullscreen">plein écran</button>
+      <button class="link" data-action="logout">quitter</button></div>`;
+  } else if(state.profile){
     const r=roleName();
     const tabs=[["dashboard","Tableau de bord"]];
     tabs.push(["tickets", r==="user"?"Mes tickets":"Tickets"]);
@@ -271,12 +322,13 @@ function renderHeader(){
     nav=`<div class="topnav">${tabs.map(([v,l])=>`<button data-action="nav" data-view="${v}" class="${state.view===v?'active':''}">${l}</button>`).join("")}</div>`;
     session=`<div class="session-info"><span class="role-chip">${ROLE_LABEL[r]||r}</span>${esc(myName())}<button class="link" data-action="logout">déconnexion</button></div>`;
   }
-  return `<header class="topbar"><div class="brand"><div class="mark">ML</div><div><div class="name">MEDLOG IT Ops</div><div class="sub">Support Desk</div></div></div>${nav}${session}</header>`;
+  return `<header class="topbar"><div class="brand"><div class="mark">ML</div><div><div class="name">MEDLOG IT Ops</div><div class="sub">${isMonitor()?"Monitoring":"Support Desk"}</div></div></div>${nav}${session}</header>`;
 }
 function renderMain(){
   if(state.booting) return `<div class="gate"><h1>Chargement…</h1><p>Connexion à la base sécurisée.</p></div>`;
   if(!state.session || !state.profile) return renderLogin();
   if(state.loadError) return `<div class="gate"><h1>Erreur de chargement</h1><div class="card"><div class="error-msg">${esc(state.loadError)}</div><button class="btn" data-action="retry" style="margin-top:12px;">Réessayer</button></div></div>`;
+  if(isMonitor()) return state.view==="report" ? renderReport() : renderMonitor();
   if(state.view==="dashboard") return renderDashboard();
   if(state.view==="tickets") return renderTicketsArea();
   if(state.view==="users") return isAdmin()?renderUsers():renderDashboard();
@@ -526,6 +578,69 @@ function maintDictionnaire(){
     <div class="section-label">Valeurs — ${state.lookupType==='service'?'Services':'Priorités'}</div>${items.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucune valeur.</div>`}`;
 }
 
+// =========================== MONITORING (mur d'écran) ===========================
+function medlogixTickets(){ return state.tickets.filter(t=>t.service==="MEDLOGIX"); }
+function monActiveMedlogix(){
+  return medlogixTickets().filter(t=>["In Progress","Testing","Pending","Reopened"].includes(t.status))
+    .sort((a,b)=>statusRank(a.status)-statusRank(b.status)||priorityRank(a.priority)-priorityRank(b.priority)||new Date(a.created_at)-new Date(b.created_at));
+}
+function monBars(items){
+  if(!items.length) return `<div style="color:#7e93b3;font-size:13px;">Aucune donnée.</div>`;
+  const max=Math.max(1,...items.map(i=>i.count));
+  return items.map(i=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;"><div style="width:130px;font-size:12px;color:#9fb3d1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(i.label)}">${esc(i.label)}</div><div style="flex:1;height:7px;background:#1c2a42;border-radius:5px;overflow:hidden;"><div style="height:100%;width:${Math.round(i.count/max*100)}%;background:#3aa0ff;border-radius:5px;"></div></div><div style="font-family:var(--mono);font-size:12px;width:24px;text-align:right;color:#cfe0f5;">${i.count}</div></div>`).join("");
+}
+function renderMonitor(){
+  const ml=medlogixTickets(); const c=s=>ml.filter(t=>t.status===s).length;
+  const openCount=ml.filter(t=>t.status!=="Closed").length;
+  const overdueCount=ml.filter(isOverdue).length;
+  const kpis=`<div class="mon-kpis">
+    <div class="mon-kpi"><div class="n">${openCount}</div><div class="l">MEDLOGIX ouverts</div></div>
+    <div class="mon-kpi amber"><div class="n">${c("Pending")}</div><div class="l">Pending</div></div>
+    <div class="mon-kpi blue"><div class="n">${c("In Progress")}</div><div class="l">In Progress</div></div>
+    <div class="mon-kpi violet"><div class="n">${c("Testing")}</div><div class="l">Testing</div></div>
+    <div class="mon-kpi pink"><div class="n">${c("Reopened")}</div><div class="l">Reopened</div></div>
+    <div class="mon-kpi red"><div class="n">${overdueCount}</div><div class="l">En retard</div></div></div>`;
+  const active=monActiveMedlogix();
+  const rows=active.slice(0,14).map(t=>{
+    const over=isOverdue(t); const mod=t.module?esc(t.module)+(t.screen?(" / "+esc(t.screen)):""):"—";
+    return `<tr><td class="mon-id">${esc(t.ticket_no||"—")}</td><td class="mon-subj">${esc(t.subject)}</td><td style="color:#9fb3d1;font-size:12.5px;">${mod}</td><td><span class="badge priority-${t.priority}">${esc(t.priority)}</span></td><td><span class="badge ${statusClass(t.status)}">${esc(t.status)}</span></td><td style="color:#9fb3d1;font-size:12.5px;">${t.assignee?esc(t.assignee.full_name||""):"—"}</td><td class="mon-age ${over?'over':''}">${daysSince(t.created_at)} j</td></tr>`;
+  }).join("");
+  const mainPanel=`<div class="mon-panel"><h3>Tâches MEDLOGIX à traiter (${active.length}) — les plus anciennes en tête</h3>${active.length?`<table class="mon-table"><thead><tr><th>N°</th><th>Sujet</th><th>Module</th><th>Priorité</th><th>Statut</th><th>Affecté à</th><th>Âge</th></tr></thead><tbody>${rows}</tbody></table>`:`<div style="color:#7e93b3;padding:24px 0;text-align:center;">Aucune tâche MEDLOGIX en cours. 🎉</div>`}</div>`;
+  const byStatus=STATUSES.filter(s=>s!=="Closed").map(s=>({label:s,count:c(s)})).filter(i=>i.count>0);
+  const byModule=(()=>{const m={};ml.filter(t=>t.status!=="Closed").forEach(t=>{const k=t.module||"—";m[k]=(m[k]||0)+1;});return Object.keys(m).map(k=>({label:k,count:m[k]})).sort((a,b)=>b.count-a.count).slice(0,8);})();
+  const others=(()=>{const m={};state.tickets.filter(t=>t.service!=="MEDLOGIX"&&t.status!=="Closed").forEach(t=>{m[t.service]=(m[t.service]||0)+1;});return Object.keys(m).map(k=>({label:k,count:m[k]}));})();
+  const othersTotal=others.reduce((a,b)=>a+b.count,0);
+  const sidePanel=`<div class="mon-panel"><h3>Répartition par statut (MEDLOGIX)</h3>${monBars(byStatus)}</div><div class="mon-panel"><h3>Par module (ouverts)</h3>${monBars(byModule)}</div><div class="mon-panel"><h3>Autres services (non prioritaires) — ${othersTotal} ouverts</h3><div class="mon-other">${others.length?others.map(o=>`<span class="chip">${esc(o.label.split(" (")[0])} : ${o.count}</span>`).join(""):'<span style="color:#7e93b3;font-size:12.5px;">Aucun</span>'}</div></div>`;
+  return `<div class="mon"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px;flex-wrap:wrap;gap:8px;"><div style="font-size:20px;font-weight:800;">Monitoring MEDLOGIX — avancement des tâches</div><div style="font-size:12px;color:#7e93b3;">Supervision en lecture seule</div></div>${kpis}<div class="mon-grid"><div>${mainPanel}</div><div>${sidePanel}</div></div><div class="mon-foot"><span>Dernière synchro : ${state.lastSync?new Date(state.lastSync).toLocaleTimeString("fr-FR"):"—"} · actualisation automatique toutes les 10 s</span><span>${ml.length} tickets MEDLOGIX au total · ${ml.filter(t=>t.status==="Closed").length} clos</span></div></div>`;
+}
+
+// =========================== RAPPORT ===========================
+function renderReport(){
+  const data=state.tickets.filter(inPeriod); const ml=data.filter(t=>t.service==="MEDLOGIX"); const c=s=>ml.filter(t=>t.status===s).length;
+  const periods=[["today","Aujourd'hui"],["yesterday","Hier"],["last7","7 derniers jours"],["this_month","Ce mois"],["prev_month","Mois précédent"],["this_year","Cette année"],["custom","Personnalisée"]];
+  const periodSelect=`<select id="dash-period">${periods.map(([v,l])=>`<option value="${v}" ${state.dashPeriod===v?'selected':''}>${l}</option>`).join("")}</select>`;
+  const customRange=state.dashPeriod==="custom"?`<div class="field" style="margin-bottom:0;"><label>Du</label><input type="date" id="cf" value="${esc(state.customFrom)}"></div><div class="field" style="margin-bottom:0;"><label>Au</label><input type="date" id="ct" value="${esc(state.customTo)}"></div>`:"";
+  const avg=(()=>{const ds=ml.filter(t=>t.status==="Closed"&&t.closed_at).map(t=>(new Date(t.closed_at)-new Date(t.created_at))/86400000);return ds.length?ds.reduce((a,b)=>a+b,0)/ds.length:null;})();
+  const tiles=`<div class="stat-row"><div class="stat"><div class="n">${ml.length}</div><div class="l">MEDLOGIX (total)</div></div><div class="stat accent"><div class="n">${ml.filter(t=>t.status!=="Closed").length}</div><div class="l">Ouverts</div></div><div class="stat accent"><div class="n">${c("In Progress")}</div><div class="l">In Progress</div></div><div class="stat accent"><div class="n">${c("Testing")}</div><div class="l">Testing</div></div><div class="stat"><div class="n">${c("Closed")}</div><div class="l">Closed</div></div><div class="stat"><div class="n">${avg==null?'—':avg.toFixed(1)+'j'}</div><div class="l">Tps moyen</div></div></div>`;
+  const grp=(arr,key)=>{const m={};arr.forEach(t=>{const k=key(t)||"—";m[k]=(m[k]||0)+1;});return Object.keys(m).map(k=>[k,m[k]]).sort((a,b)=>b[1]-a[1]);};
+  const tbl=(title,pairs)=>`<div class="card" style="margin-bottom:16px;"><div class="section-label">${title}</div><table style="width:100%;border-collapse:collapse;font-size:13px;"><tbody>${pairs.length?pairs.map(([k,v])=>`<tr><td style="padding:6px 8px;border-bottom:1px solid var(--border);">${esc(k)}</td><td style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:right;font-family:var(--mono);">${v}</td></tr>`).join(""):`<tr><td>Aucune donnée</td><td></td></tr>`}</tbody></table></div>`;
+  const open=ml.filter(t=>t.status!=="Closed").sort((a,b)=>statusRank(a.status)-statusRank(b.status)||priorityRank(a.priority)-priorityRank(b.priority)||new Date(a.created_at)-new Date(b.created_at));
+  const openRows=open.map(t=>`<tr><td class="ticket-id">${esc(t.ticket_no||"")}</td><td>${esc(t.subject)}</td><td>${t.module?esc(t.module):"—"}</td><td>${esc(t.priority)}</td><td>${esc(t.status)}</td><td>${esc(reqName(t))}</td><td>${t.assignee?esc(t.assignee.full_name||""):"—"}</td><td style="font-family:var(--mono);">${daysSince(t.created_at)} j</td></tr>`).join("");
+  return `<h1 class="page-title">Rapport MEDLOGIX</h1><p class="page-sub">Synthèse de l'avancement — généré le ${fmtDate(Date.now())}.</p>
+    <div class="filters no-print"><div class="field" style="margin-bottom:0;"><label>Période</label>${periodSelect}</div>${customRange}<button class="btn secondary" data-action="print-report">Imprimer / PDF</button><button class="btn secondary" data-action="export-medlogix">Exporter CSV</button></div>
+    ${tiles}
+    <div class="two-col">${tbl("Par statut",grp(ml,t=>t.status))}${tbl("Par priorité",grp(ml,t=>t.priority))}</div>
+    <div class="two-col">${tbl("Par module",grp(ml,t=>t.module))}${tbl("Par agent",grp(ml,t=>t.assignee?t.assignee.full_name:"Non affecté"))}</div>
+    <div class="card"><div class="section-label">Tâches MEDLOGIX ouvertes (${open.length})</div>${open.length?`<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12.5px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid var(--border);">N°</th><th style="text-align:left;padding:8px;border-bottom:1px solid var(--border);">Sujet</th><th style="text-align:left;padding:8px;border-bottom:1px solid var(--border);">Module</th><th style="text-align:left;padding:8px;border-bottom:1px solid var(--border);">Priorité</th><th style="text-align:left;padding:8px;border-bottom:1px solid var(--border);">Statut</th><th style="text-align:left;padding:8px;border-bottom:1px solid var(--border);">Demandeur</th><th style="text-align:left;padding:8px;border-bottom:1px solid var(--border);">Affecté</th><th style="text-align:left;padding:8px;border-bottom:1px solid var(--border);">Âge</th></tr></thead><tbody>${openRows}</tbody></table></div>`:`<div class="empty-state">Aucune tâche ouverte.</div>`}</div>`;
+}
+function exportMedlogixCSV(){
+  const cols=["N°","Service","Module","Ecran","Priorite","Sujet","Demandeur","Statut","Affecte","Cree","Jours"];
+  const rows=state.tickets.filter(t=>t.service==="MEDLOGIX").map(t=>[t.ticket_no||"",t.service,t.module||"",t.screen||"",t.priority,t.subject,reqName(t),t.status,t.assignee?t.assignee.full_name||"":"",new Date(t.created_at).toLocaleString("fr-FR"),String(daysSince(t.created_at))]);
+  const csv=[cols,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+  const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob);
+  const a=document.createElement("a"); a.href=url; a.download="medlog_medlogix.csv"; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
 // =========================== EVENTS ===========================
 function bindEvents(){
   document.querySelectorAll("[data-action]").forEach(el=>{ el.addEventListener(el.dataset.action==="change-role"?"change":"click", onAction); });
@@ -546,7 +661,12 @@ async function onAction(e){
   const unbusy=()=>{ el.disabled=false; if(el.dataset._t) el.textContent=el.dataset._t; };
 
   if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; state.staffNew=false; if(el.dataset.view==="users"){state.usersLoaded=false;} render(); return; }
-  if(action==="logout"){ await sb.auth.signOut(); state.session=null; state.profile=null; state.view="dashboard"; render(); return; }
+  if(action==="mon-nav"){ state.view=el.dataset.view; render(); return; }
+  if(action==="refresh-now"){ busy("…"); try{ await reloadTickets(); state.lastSync=Date.now(); }catch(e){} render(); return; }
+  if(action==="fullscreen"){ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(e){} return; }
+  if(action==="print-report"){ window.print(); return; }
+  if(action==="export-medlogix"){ exportMedlogixCSV(); return; }
+  if(action==="logout"){ if(monDataTimer){clearInterval(monDataTimer);monDataTimer=null;} if(monClockTimer){clearInterval(monClockTimer);monClockTimer=null;} await sb.auth.signOut(); state.session=null; state.profile=null; state.view="dashboard"; render(); return; }
   if(action==="retry"){ state.booting=true; render(); await afterLogin(); return; }
   if(action==="goto-new"){ state.view="tickets"; state.selectedTicketId=null; state.staffNew=true; if(!state.newService) state.newService=getServices()[0]; render(); return; }
   if(action==="staff-new-cancel"){ state.staffNew=false; render(); return; }
