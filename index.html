@@ -199,7 +199,7 @@ let state = {
   selectedAssetId:null, assetNew:false, assetMovements:[], profilesList:[],
   stockItems:[], stockLoaded:false, stockSubview:"inventory", stockSearch:"", stockMoves:[], locations:[], locationsLoaded:false,
   selectedStockId:null, stockNew:false,
-  prs:[], prLoaded:false, prItems:[], selectedPrId:null, prNew:false, prDraftItems:[], departments:[]
+  prs:[], prLoaded:false, prItems:[], selectedPrId:null, prNew:false, prDraftItems:[], departments:[], departmentsLoaded:false
 };
 
 // --- Utilitaires ---
@@ -222,7 +222,8 @@ function canViewProcurement(){ return ["admin","it_manager","buyer"].includes(ro
 function canCreatePr(){ return ["admin","it_manager","buyer"].includes(roleName()); }
 function canCreate(){ return roleName() && roleName()!=="viewer"; }
 function uid(){ return state.session ? state.session.user.id : null; }
-function myName(){ return state.profile ? (state.profile.full_name||state.profile.email) : ""; }
+function displayName(p){ if(!p) return ""; const fl=[p.first_name,p.last_name].filter(Boolean).join(" ").trim(); return fl || p.full_name || p.email || ""; }
+function myName(){ return state.profile ? displayName(state.profile) : ""; }
 function getTicket(id){ return state.tickets.find(t=>t.id===id); }
 function lkVals(type, fb){ const r=state.lookups.filter(l=>l.type===type); return r.length ? r.sort((a,b)=>(a.sort_order||0)-(b.sort_order||0)).map(l=>l.value) : fb.slice(); }
 function getServices(){ return lkVals("service", SERVICES_FALLBACK); }
@@ -557,15 +558,22 @@ function renderUsers(){
   else list=`<div class="ticket-list">${state.adminUsers.map(u=>{
     const active=u.is_active!==false;
     const roleOpts=state.roles.map(r=>`<option value="${r.id}" ${u.role_id===r.id?'selected':''}>${ROLE_LABEL[r.name]||r.name}</option>`).join("");
-    return `<div class="ticket-row" style="cursor:default;border-left-color:${active?'var(--brand-2)':'var(--critical)'};">
-      <div class="col-main"><div class="subject">${esc(u.full_name||"(sans nom)")} ${active?"":'<span class="badge priority-Critical">Désactivé</span>'}</div><div class="meta"><span class="ticket-id">${esc(u.email)}</span></div></div>
-      <div class="col-status" style="align-items:flex-end;gap:6px;"><div class="btn-row">
-        <select data-action="change-role" data-id="${u.id}" style="font-size:12px;padding:5px 8px;">${roleOpts}</select>
-        <button class="btn tiny secondary" data-action="toggle-active" data-id="${u.id}" data-active="${active?'0':'1'}">${active?'Désactiver':'Activer'}</button>
-      </div></div></div>`;
+    return `<div class="ticket-row" style="cursor:default;border-left-color:${active?'var(--brand-2)':'var(--critical)'};display:block;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+        <div class="col-main"><div class="subject">${esc(displayName(u))||"(sans nom)"} ${active?"":'<span class="badge priority-Critical">Désactivé</span>'}</div><div class="meta"><span class="ticket-id">${esc(u.email)}</span></div></div>
+        <div class="col-status" style="align-items:flex-end;gap:6px;"><div class="btn-row">
+          <select data-action="change-role" data-id="${u.id}" style="font-size:12px;padding:5px 8px;">${roleOpts}</select>
+          <button class="btn tiny secondary" data-action="toggle-active" data-id="${u.id}" data-active="${active?'0':'1'}">${active?'Désactiver':'Activer'}</button>
+        </div></div>
+      </div>
+      <div class="field-row" style="margin-top:10px;">
+        <div class="field" style="margin-bottom:0;"><label>Prénom</label><input type="text" id="fn-${u.id}" value="${esc(u.first_name||'')}" placeholder="Prénom"></div>
+        <div class="field" style="margin-bottom:0;"><label>Nom</label><input type="text" id="ln-${u.id}" value="${esc(u.last_name||'')}" placeholder="Nom"></div>
+        <div class="field" style="margin-bottom:0;display:flex;align-items:flex-end;"><button class="btn tiny" data-action="save-name" data-id="${u.id}">Enregistrer le nom</button></div>
+      </div></div>`;
   }).join("")}</div>`;
   return `<h1 class="page-title">Utilisateurs</h1>
-    <p class="page-sub">Attribution des rôles. La <strong>création</strong> de comptes se fait dans Supabase (Authentication → Add user), puis le rôle est attribué ici.</p>
+    <p class="page-sub">Renseignez le <strong>prénom et le nom</strong> de chaque compte (affichés partout à la place de l'email) et attribuez les rôles. La <strong>création</strong> de comptes se fait dans Supabase (Authentication → Add user).</p>
     <div class="card" style="margin-bottom:18px;"><div class="section-label">Créer un compte</div>
       <div class="hint" style="font-size:13px;color:var(--ink-soft);">Dans le tableau de bord Supabase → <strong>Authentication → Users → Add user</strong> (cochez « Auto Confirm »). Le profil apparaît ici automatiquement ; attribuez-lui ensuite son rôle ci-dessous.</div>
     </div>
@@ -592,7 +600,7 @@ async function loadAssets(){
     const [a, cats, profs] = await Promise.all([
       sb.from("assets").select("*, category:category_id(name), location:location_id(name), assigned:assigned_user_id(full_name)").order("created_at",{ascending:false}),
       sb.from("asset_categories").select("*").order("name"),
-      sb.from("profiles").select("id, full_name, email").eq("is_active",true).order("full_name")
+      sb.from("profiles").select("id, full_name, first_name, last_name, email").eq("is_active",true).order("full_name")
     ]);
     state.assets=a.data||[]; state.assetCats=cats.data||[]; state.profilesList=profs.data||[]; state.assetsLoaded=true; render();
   }catch(e){ state.assets=[]; state.assetsLoaded=true; render(); }
@@ -607,7 +615,7 @@ async function loadAssetMovements(id){
   state.assetMovements=data||[];
   if(state.selectedAssetId===id) render();
 }
-function userName(id){ if(!id) return "—"; const p=state.profilesList.find(x=>x.id===id); return p?(p.full_name||p.email):"—"; }
+function userName(id){ if(!id) return "—"; const p=state.profilesList.find(x=>x.id===id); return p?displayName(p):"—"; }
 
 function renderAssetsArea(){
   if(!state.assetsLoaded){ loadAssets(); return `<div class="empty-state">Chargement du registre…</div>`; }
@@ -687,7 +695,7 @@ function renderAssetDetail(a){
   const editable=canEditAssets();
   const statusOpts=assetStatuses().map(s=>`<option value="${esc(s)}" ${a.status===s?'selected':''}>${esc(assetStatusLabel(s))}</option>`).join("");
   const warn = a.warranty_expiry ? (new Date(a.warranty_expiry) < new Date() ? `<span class="badge overdue">Garantie expirée</span>` : "") : "";
-  const userOpts=`<option value="">— choisir un utilisateur —</option>`+state.profilesList.map(p=>`<option value="${p.id}">${esc(p.full_name||p.email)}</option>`).join("");
+  const userOpts=`<option value="">— choisir un utilisateur —</option>`+state.profilesList.map(p=>`<option value="${p.id}">${esc(displayName(p))}</option>`).join("");
   let assignCard="";
   if(editable){
     assignCard=`<div class="card"><div class="section-label">Affectation & statut</div>
@@ -927,10 +935,12 @@ function renderMaintenance(){
     <button data-action="maint-subview" data-view="annonces" class="${state.maintSubview==='annonces'?'active':''}">Annonces</button>
     <button data-action="maint-subview" data-view="dictionnaire" class="${state.maintSubview==='dictionnaire'?'active':''}">Dictionnaire de données</button>
     <button data-action="maint-subview" data-view="sites" class="${state.maintSubview==='sites'?'active':''}">Sites</button>
+    <button data-action="maint-subview" data-view="services" class="${state.maintSubview==='services'?'active':''}">Services</button>
   </div>`;
   let body;
   if(state.maintSubview==="dictionnaire") body=maintDictionnaire();
   else if(state.maintSubview==="sites") body=maintSites();
+  else if(state.maintSubview==="services") body=maintServices();
   else body=maintAnnonces();
   return `<h1 class="page-title">Maintenance</h1><p class="page-sub">Annonces, listes configurables et sites.</p>${sub}${body}`;
 }
@@ -953,6 +963,25 @@ function maintSites(){
       <div class="field" style="max-width:240px;"><label for="loc-country">Pays</label><input type="text" id="loc-country" value="Cameroun"></div>
       <div id="loc-error"></div><button class="btn" data-action="create-location">Ajouter le site</button></div>
     <div class="section-label">Sites existants</div>${state.locations.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucun site.</div>`}`;
+}
+function loadDepartments(){
+  sb.from("departments").select("*").order("name").then(({data})=>{ state.departments=data||[]; state.departmentsLoaded=true; render(); });
+}
+function maintServices(){
+  if(!state.departmentsLoaded){ loadDepartments(); return `<div class="empty-state">Chargement des services…</div>`; }
+  const rows=state.departments.map(d=>{
+    const active=d.is_active!==false;
+    return `<div class="ticket-row" style="cursor:default;border-left-color:${active?'var(--brand-2)':'var(--ink-faint)'};">
+      <div class="col-main"><div class="subject">${esc(d.name)} ${d.code?`<span class="ticket-id">${esc(d.code)}</span>`:""} ${active?"":'<span class="badge priority-Medium">Inactif</span>'}</div></div>
+      <div class="col-status"><div class="btn-row"><button class="btn tiny secondary" data-action="toggle-department" data-id="${d.id}" data-active="${active?'0':'1'}">${active?'Désactiver':'Activer'}</button><button class="btn tiny danger" data-action="del-department" data-id="${d.id}">Supprimer</button></div></div></div>`;
+  }).join("");
+  return `<div class="card" style="margin-bottom:20px;"><div class="section-label">Ajouter un service</div>
+      <div class="field-row">
+        <div class="field"><label for="dep-name">Nom du service</label><input type="text" id="dep-name" placeholder="ex : Transit & Douane"></div>
+        <div class="field"><label for="dep-code">Code</label><input type="text" id="dep-code" placeholder="ex : TRD"></div>
+      </div>
+      <div id="dep-error"></div><button class="btn" data-action="create-department">Ajouter le service</button></div>
+    <div class="section-label">Services existants</div>${state.departments.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucun service.</div>`}`;
 }
 function maintAnnonces(){
   const list=state.announcements;
@@ -1084,7 +1113,7 @@ async function onAction(e){
   const busy=t=>{ el.disabled=true; if(el.tagName==="BUTTON"){ el.dataset._t=el.textContent; el.textContent=t; } };
   const unbusy=()=>{ el.disabled=false; if(el.dataset._t) el.textContent=el.dataset._t; };
 
-  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; state.staffNew=false; state.selectedAssetId=null; state.assetNew=false; state.selectedStockId=null; state.stockNew=false; state.selectedPrId=null; state.prNew=false; state.prDraftItems=[]; if(el.dataset.view==="users"){state.usersLoaded=false;} if(el.dataset.view==="assets"){state.assetsLoaded=false;} if(el.dataset.view==="stock"){state.stockLoaded=false;} if(el.dataset.view==="procurement"){state.prLoaded=false;} if(el.dataset.view==="maintenance"){state.locationsLoaded=false;} render(); return; }
+  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; state.staffNew=false; state.selectedAssetId=null; state.assetNew=false; state.selectedStockId=null; state.stockNew=false; state.selectedPrId=null; state.prNew=false; state.prDraftItems=[]; if(el.dataset.view==="users"){state.usersLoaded=false;} if(el.dataset.view==="assets"){state.assetsLoaded=false;} if(el.dataset.view==="stock"){state.stockLoaded=false;} if(el.dataset.view==="procurement"){state.prLoaded=false;} if(el.dataset.view==="maintenance"){state.locationsLoaded=false; state.departmentsLoaded=false;} render(); return; }
   if(action==="mon-nav"){ state.view=el.dataset.view; render(); return; }
   if(action==="refresh-now"){ busy("…"); try{ await reloadTickets(); state.lastSync=Date.now(); }catch(e){} render(); return; }
   if(action==="fullscreen"){ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(e){} return; }
@@ -1333,6 +1362,20 @@ async function onAction(e){
   if(action==="toggle-location"){ const active=el.dataset.active==="1"; busy("…"); await sb.from("locations").update({is_active:active}).eq("id",el.dataset.id); state.locationsLoaded=false; loadLocations(); return; }
   if(action==="del-location"){ if(!confirm("Supprimer ce site ?")) return; busy("…"); try{ await sb.from("locations").delete().eq("id",el.dataset.id); }catch(err){ alert(err.message||String(err)); } state.locationsLoaded=false; loadLocations(); return; }
 
+  // ---- Services (departments) ----
+  if(action==="create-department"){
+    const name=document.getElementById("dep-name").value.trim();
+    const code=document.getElementById("dep-code").value.trim();
+    const errBox=document.getElementById("dep-error");
+    if(!name){ errBox.innerHTML=`<div class="error-msg">Le nom du service est obligatoire.</div>`; return; }
+    busy("Ajout…");
+    const { error } = await sb.from("departments").insert({ name, code, is_active:true });
+    if(error){ errBox.innerHTML=`<div class="error-msg">${esc(error.message)}</div>`; unbusy(); return; }
+    state.departmentsLoaded=false; loadDepartments(); return;
+  }
+  if(action==="toggle-department"){ const active=el.dataset.active==="1"; busy("…"); await sb.from("departments").update({is_active:active}).eq("id",el.dataset.id); state.departmentsLoaded=false; loadDepartments(); return; }
+  if(action==="del-department"){ if(!confirm("Supprimer ce service ?")) return; busy("…"); try{ await sb.from("departments").delete().eq("id",el.dataset.id); }catch(err){ alert(err.message||String(err)); } state.departmentsLoaded=false; loadDepartments(); return; }
+
   // ---- Users ----
   if(action==="change-role"){
     const id=el.dataset.id, role_id=el.value;
@@ -1343,6 +1386,16 @@ async function onAction(e){
     const id=el.dataset.id, active=el.dataset.active==="1";
     busy("…");
     try{ await sb.from("profiles").update({is_active:active}).eq("id",id); await loadUsers(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); } return;
+  }
+  if(action==="save-name"){
+    const id=el.dataset.id;
+    const first_name=(document.getElementById("fn-"+id).value||"").trim();
+    const last_name=(document.getElementById("ln-"+id).value||"").trim();
+    const full_name=[first_name,last_name].filter(Boolean).join(" ").trim();
+    if(!full_name){ alert("Renseignez au moins un prénom ou un nom."); return; }
+    busy("…");
+    try{ await sb.from("profiles").update({ first_name, last_name, full_name }).eq("id",id); await loadUsers(); }
     catch(err){ alert(err.message||String(err)); unbusy(); } return;
   }
 }
