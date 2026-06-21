@@ -197,7 +197,7 @@ let state = {
   adminUsers:[], usersLoaded:false,
   assets:[], assetCats:[], assetsLoaded:false, assetFilter:{cat:"all", status:"all", search:""},
   selectedAssetId:null, assetNew:false, assetMovements:[], profilesList:[],
-  stockItems:[], stockLoaded:false, stockSubview:"inventory", stockSearch:"", stockMoves:[], locations:[],
+  stockItems:[], stockLoaded:false, stockSubview:"inventory", stockSearch:"", stockMoves:[], locations:[], locationsLoaded:false,
   selectedStockId:null, stockNew:false
 };
 
@@ -722,11 +722,12 @@ function isLowStock(it){ return Number(it.quantity) < Number(it.min_threshold||0
 
 async function loadStock(){
   try{
-    const [items, locs] = await Promise.all([
+    const [items, locs, cats] = await Promise.all([
       sb.from("stock_items").select("*, category:category_id(name), location:location_id(name)").eq("is_active",true).order("name"),
-      sb.from("locations").select("*").eq("is_active",true).order("name")
+      sb.from("locations").select("*").eq("is_active",true).order("name"),
+      sb.from("asset_categories").select("*").order("name")
     ]);
-    state.stockItems=items.data||[]; state.locations=locs.data||[]; state.stockLoaded=true; render();
+    state.stockItems=items.data||[]; state.locations=locs.data||[]; state.assetCats=cats.data||state.assetCats; state.stockLoaded=true; render();
   }catch(e){ state.stockItems=[]; state.stockLoaded=true; render(); }
 }
 async function reloadStock(){
@@ -833,9 +834,33 @@ function renderMaintenance(){
   const sub=`<div class="subnav">
     <button data-action="maint-subview" data-view="annonces" class="${state.maintSubview==='annonces'?'active':''}">Annonces</button>
     <button data-action="maint-subview" data-view="dictionnaire" class="${state.maintSubview==='dictionnaire'?'active':''}">Dictionnaire de données</button>
+    <button data-action="maint-subview" data-view="sites" class="${state.maintSubview==='sites'?'active':''}">Sites</button>
   </div>`;
-  const body = state.maintSubview==="dictionnaire" ? maintDictionnaire() : maintAnnonces();
-  return `<h1 class="page-title">Maintenance</h1><p class="page-sub">Annonces du tableau de bord et listes configurables.</p>${sub}${body}`;
+  let body;
+  if(state.maintSubview==="dictionnaire") body=maintDictionnaire();
+  else if(state.maintSubview==="sites") body=maintSites();
+  else body=maintAnnonces();
+  return `<h1 class="page-title">Maintenance</h1><p class="page-sub">Annonces, listes configurables et sites.</p>${sub}${body}`;
+}
+function loadLocations(){
+  sb.from("locations").select("*").order("name").then(({data})=>{ state.locations=data||[]; state.locationsLoaded=true; render(); });
+}
+function maintSites(){
+  if(!state.locationsLoaded){ loadLocations(); return `<div class="empty-state">Chargement des sites…</div>`; }
+  const rows=state.locations.map(l=>{
+    const active=l.is_active!==false;
+    return `<div class="ticket-row" style="cursor:default;border-left-color:${active?'var(--brand-2)':'var(--ink-faint)'};">
+      <div class="col-main"><div class="subject">${esc(l.name)} ${l.code?`<span class="ticket-id">${esc(l.code)}</span>`:""} ${active?"":'<span class="badge priority-Medium">Inactif</span>'}</div><div class="meta"><span>${esc(l.country||"")}</span></div></div>
+      <div class="col-status"><div class="btn-row"><button class="btn tiny secondary" data-action="toggle-location" data-id="${l.id}" data-active="${active?'0':'1'}">${active?'Désactiver':'Activer'}</button><button class="btn tiny danger" data-action="del-location" data-id="${l.id}">Supprimer</button></div></div></div>`;
+  }).join("");
+  return `<div class="card" style="margin-bottom:20px;"><div class="section-label">Ajouter un site</div>
+      <div class="field-row">
+        <div class="field"><label for="loc-name">Nom du site</label><input type="text" id="loc-name" placeholder="ex : Douala — Bonabéri"></div>
+        <div class="field"><label for="loc-code">Code</label><input type="text" id="loc-code" placeholder="ex : DLA"></div>
+      </div>
+      <div class="field" style="max-width:240px;"><label for="loc-country">Pays</label><input type="text" id="loc-country" value="Cameroun"></div>
+      <div id="loc-error"></div><button class="btn" data-action="create-location">Ajouter le site</button></div>
+    <div class="section-label">Sites existants</div>${state.locations.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucun site.</div>`}`;
 }
 function maintAnnonces(){
   const list=state.announcements;
@@ -967,7 +992,7 @@ async function onAction(e){
   const busy=t=>{ el.disabled=true; if(el.tagName==="BUTTON"){ el.dataset._t=el.textContent; el.textContent=t; } };
   const unbusy=()=>{ el.disabled=false; if(el.dataset._t) el.textContent=el.dataset._t; };
 
-  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; state.staffNew=false; state.selectedAssetId=null; state.assetNew=false; state.selectedStockId=null; state.stockNew=false; if(el.dataset.view==="users"){state.usersLoaded=false;} if(el.dataset.view==="assets"){state.assetsLoaded=false;} if(el.dataset.view==="stock"){state.stockLoaded=false;} render(); return; }
+  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; state.staffNew=false; state.selectedAssetId=null; state.assetNew=false; state.selectedStockId=null; state.stockNew=false; if(el.dataset.view==="users"){state.usersLoaded=false;} if(el.dataset.view==="assets"){state.assetsLoaded=false;} if(el.dataset.view==="stock"){state.stockLoaded=false;} if(el.dataset.view==="maintenance"){state.locationsLoaded=false;} render(); return; }
   if(action==="mon-nav"){ state.view=el.dataset.view; render(); return; }
   if(action==="refresh-now"){ busy("…"); try{ await reloadTickets(); state.lastSync=Date.now(); }catch(e){} render(); return; }
   if(action==="fullscreen"){ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(e){} return; }
@@ -1169,6 +1194,21 @@ async function onAction(e){
     state.lookups=await fetchLookups(); render(); return;
   }
   if(action==="del-lookup"){ if(!confirm("Supprimer cette valeur ?")) return; busy("…"); await sb.from("lookups").delete().eq("id",el.dataset.id); state.lookups=await fetchLookups(); render(); return; }
+
+  // ---- Sites (locations) ----
+  if(action==="create-location"){
+    const name=document.getElementById("loc-name").value.trim();
+    const code=document.getElementById("loc-code").value.trim();
+    const country=document.getElementById("loc-country").value.trim();
+    const errBox=document.getElementById("loc-error");
+    if(!name){ errBox.innerHTML=`<div class="error-msg">Le nom du site est obligatoire.</div>`; return; }
+    busy("Ajout…");
+    const { error } = await sb.from("locations").insert({ name, code, country, is_active:true });
+    if(error){ errBox.innerHTML=`<div class="error-msg">${esc(error.message)}</div>`; unbusy(); return; }
+    state.locationsLoaded=false; loadLocations(); return;
+  }
+  if(action==="toggle-location"){ const active=el.dataset.active==="1"; busy("…"); await sb.from("locations").update({is_active:active}).eq("id",el.dataset.id); state.locationsLoaded=false; loadLocations(); return; }
+  if(action==="del-location"){ if(!confirm("Supprimer ce site ?")) return; busy("…"); try{ await sb.from("locations").delete().eq("id",el.dataset.id); }catch(err){ alert(err.message||String(err)); } state.locationsLoaded=false; loadLocations(); return; }
 
   // ---- Users ----
   if(action==="change-role"){
