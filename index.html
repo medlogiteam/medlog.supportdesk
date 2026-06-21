@@ -196,7 +196,9 @@ let state = {
   maintSubview:"annonces", lookupType:"service",
   adminUsers:[], usersLoaded:false,
   assets:[], assetCats:[], assetsLoaded:false, assetFilter:{cat:"all", status:"all", search:""},
-  selectedAssetId:null, assetNew:false, assetMovements:[], profilesList:[]
+  selectedAssetId:null, assetNew:false, assetMovements:[], profilesList:[],
+  stockItems:[], stockLoaded:false, stockSubview:"inventory", stockSearch:"", stockMoves:[], locations:[],
+  selectedStockId:null, stockNew:false
 };
 
 // --- Utilitaires ---
@@ -213,6 +215,8 @@ function isAdmin(){ return roleName()==="admin"; }
 function isStaff(){ return ["admin","it_manager","technician"].includes(roleName()); }
 function canViewAssets(){ return ["admin","it_manager","technician","asset_manager"].includes(roleName()); }
 function canEditAssets(){ return ["admin","asset_manager"].includes(roleName()); }
+function canViewStock(){ return ["admin","it_manager","asset_manager","store_keeper"].includes(roleName()); }
+function canMoveStock(){ return ["admin","asset_manager","store_keeper"].includes(roleName()); }
 function canCreate(){ return roleName() && roleName()!=="viewer"; }
 function uid(){ return state.session ? state.session.user.id : null; }
 function myName(){ return state.profile ? (state.profile.full_name||state.profile.email) : ""; }
@@ -339,6 +343,7 @@ function renderHeader(){
     const tabs=[["dashboard","Tableau de bord"]];
     tabs.push(["tickets", r==="user"?"Mes tickets":"Tickets"]);
     if(canViewAssets()) tabs.push(["assets","Actifs"]);
+    if(canViewStock()) tabs.push(["stock","Stock"]);
     if(isAdmin()){ tabs.push(["users","Utilisateurs"]); tabs.push(["maintenance","Maintenance"]); }
     nav=`<div class="topnav">${tabs.map(([v,l])=>`<button data-action="nav" data-view="${v}" class="${state.view===v?'active':''}">${l}</button>`).join("")}</div>`;
     session=`<div class="session-info"><span class="role-chip">${ROLE_LABEL[r]||r}</span>${esc(myName())}<button class="link" data-action="logout">déconnexion</button></div>`;
@@ -353,6 +358,7 @@ function renderMain(){
   if(state.view==="dashboard") return renderDashboard();
   if(state.view==="tickets") return renderTicketsArea();
   if(state.view==="assets") return canViewAssets()?renderAssetsArea():renderDashboard();
+  if(state.view==="stock") return canViewStock()?renderStockArea():renderDashboard();
   if(state.view==="users") return isAdmin()?renderUsers():renderDashboard();
   if(state.view==="maintenance") return isAdmin()?renderMaintenance():renderDashboard();
   return "";
@@ -708,6 +714,120 @@ function renderAssetDetail(a){
     ${historyCard}`;
 }
 
+// =========================== STOCK (Phase 2 — tranche 3) ===========================
+const STOCK_MOVE_TYPES=[["receipt","Réception (+)"],["transfer","Transfert"],["issue","Sortie (−)"],["return","Retour (+)"],["adjustment","Ajustement (=)"]];
+function moveTypeLabel(t){ const x=STOCK_MOVE_TYPES.find(m=>m[0]===t); return x?x[1]:t; }
+function locName(id){ const l=state.locations.find(x=>x.id===id); return l?l.name:"—"; }
+function isLowStock(it){ return Number(it.quantity) < Number(it.min_threshold||0); }
+
+async function loadStock(){
+  try{
+    const [items, locs] = await Promise.all([
+      sb.from("stock_items").select("*, category:category_id(name), location:location_id(name)").eq("is_active",true).order("name"),
+      sb.from("locations").select("*").eq("is_active",true).order("name")
+    ]);
+    state.stockItems=items.data||[]; state.locations=locs.data||[]; state.stockLoaded=true; render();
+  }catch(e){ state.stockItems=[]; state.stockLoaded=true; render(); }
+}
+async function reloadStock(){
+  const { data } = await sb.from("stock_items").select("*, category:category_id(name), location:location_id(name)").eq("is_active",true).order("name");
+  state.stockItems=data||[];
+}
+async function loadStockMoves(id){
+  const { data } = await sb.from("stock_movements").select("*").eq("item_id",id).order("created_at",{ascending:false});
+  state.stockMoves=data||[];
+  if(state.selectedStockId===id) render();
+}
+
+function renderStockArea(){
+  if(!state.stockLoaded){ loadStock(); return `<div class="empty-state">Chargement du stock…</div>`; }
+  if(state.selectedStockId){ const it=state.stockItems.find(x=>x.id===state.selectedStockId); if(it) return `<button class="back-link" data-action="stock-back">&larr; Retour</button>`+renderStockDetail(it); state.selectedStockId=null; }
+  if(state.stockNew && canMoveStock()) return `<button class="back-link" data-action="stock-cancel">&larr; Retour à l'inventaire</button>`+renderStockForm();
+  const sub=`<div class="subnav">
+    <button data-action="stock-subview" data-view="inventory" class="${state.stockSubview==='inventory'?'active':''}">Inventaire</button>
+    <button data-action="stock-subview" data-view="alerts" class="${state.stockSubview==='alerts'?'active':''}">Alertes${state.stockItems.filter(isLowStock).length?` (${state.stockItems.filter(isLowStock).length})`:""}</button>
+  </div>`;
+  return sub + (state.stockSubview==="alerts" ? renderStockAlerts() : renderStockInventory());
+}
+
+function stockRow(it){
+  const low=isLowStock(it);
+  return `<div class="ticket-row" data-action="open-stock" data-id="${it.id}" style="${low?'border-left-color:var(--critical);':''}">
+    <div class="col-main"><div class="subject">${esc(it.name)} ${it.sku?`<span class="ticket-id">${esc(it.sku)}</span>`:""}</div>
+      <div class="meta"><span class="badge svc">${esc(it.category?it.category.name:"—")}</span><span>${it.location?esc(it.location.name):""}</span><span>Seuil min : ${esc(it.min_threshold||0)}</span></div></div>
+    <div class="col-status"><span class="badge ${low?'overdue':'closed'}">${esc(it.quantity)} ${esc(it.unit||"")}</span>${low?`<span class="badge overdue">Sous le seuil</span>`:""}</div></div>`;
+}
+function renderStockInventory(){
+  let list=state.stockItems.slice();
+  if(state.stockSearch.trim()){ const q=state.stockSearch.toLowerCase(); list=list.filter(it=>(it.name||"").toLowerCase().includes(q)||(it.sku||"").toLowerCase().includes(q)); }
+  const newBtn=canMoveStock()?`<button class="btn secondary" data-action="stock-new">+ Nouvel article</button>`:"";
+  return `<h1 class="page-title">Inventaire</h1><p class="page-sub">${state.stockItems.length} article(s) en stock.</p>
+    <div class="filters"><div class="field search"><label>Recherche</label><input type="text" id="st-search" placeholder="Nom, référence…" value="${esc(state.stockSearch)}"></div>${newBtn}</div>
+    ${list.length?`<div class="ticket-list">${list.map(stockRow).join("")}</div>`:`<div class="empty-state">Aucun article.</div>`}`;
+}
+function renderStockAlerts(){
+  const low=state.stockItems.filter(isLowStock);
+  return `<h1 class="page-title">Alertes de stock</h1><p class="page-sub">Articles dont la quantité est inférieure au seuil minimum.</p>
+    ${low.length?`<div class="ticket-list">${low.map(stockRow).join("")}</div>`:`<div class="empty-state">Aucune alerte — tous les articles sont au-dessus de leur seuil. ✅</div>`}`;
+}
+
+function renderStockForm(){
+  const catOptions=state.assetCats.slice().sort((a,b)=>(a.parent_id?1:0)-(b.parent_id?1:0)||a.name.localeCompare(b.name)).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("");
+  const locOptions=`<option value="">— site —</option>`+state.locations.map(l=>`<option value="${l.id}">${esc(l.name)}</option>`).join("");
+  return `<h1 class="page-title">Nouvel article de stock</h1><p class="page-sub">Créer une référence d'inventaire.</p>
+    <div class="card">
+      <div class="field-row">
+        <div class="field"><label for="st-name">Désignation</label><input type="text" id="st-name" placeholder="ex : Câble HDMI 2m"></div>
+        <div class="field"><label for="st-sku">Référence / SKU</label><input type="text" id="st-sku"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="st-cat">Catégorie</label><select id="st-cat">${catOptions}</select></div>
+        <div class="field"><label for="st-loc">Site</label><select id="st-loc">${locOptions}</select></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="st-qty">Quantité initiale</label><input type="text" id="st-qty" placeholder="0"></div>
+        <div class="field"><label for="st-min">Seuil minimum</label><input type="text" id="st-min" placeholder="0"></div>
+      </div>
+      <div class="field" style="max-width:200px;"><label for="st-unit">Unité</label><input type="text" id="st-unit" placeholder="pièce, m, boîte…"></div>
+      <div id="st-error"></div>
+      <button class="btn" data-action="submit-stock">Créer l'article</button>
+    </div>`;
+}
+
+function renderStockDetail(it){
+  const editable=canMoveStock();
+  const low=isLowStock(it);
+  const typeOpts=STOCK_MOVE_TYPES.map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
+  const locOpts=`<option value="">— site (transfert) —</option>`+state.locations.map(l=>`<option value="${l.id}">${esc(l.name)}</option>`).join("");
+  const moves=(state.stockMoves||[]).map(m=>{
+    const sign=(m.type==="receipt"||m.type==="return")?"+":(m.type==="issue"?"−":(m.type==="adjustment"?"=":""));
+    return `<div class="thread-item"><div class="t-head"><span class="who">${esc(moveTypeLabel(m.type))} ${sign}${esc(m.qty)}</span><span>${fmtDate(m.created_at)}</span></div><div class="t-body" style="color:var(--ink-soft);font-size:12.5px;">${esc(userName(m.actor_id))}${m.reference?` · ${esc(m.reference)}`:""}${m.to_location_id?` · → ${esc(locName(m.to_location_id))}`:""}</div></div>`;
+  }).join("");
+  let moveCard="";
+  if(editable){
+    moveCard=`<div class="card"><div class="section-label">Enregistrer un mouvement</div>
+      <div class="field-row">
+        <div class="field"><label for="sm-type">Type</label><select id="sm-type" onchange="onStockTypeChange()">${typeOpts}</select></div>
+        <div class="field"><label for="sm-qty">Quantité</label><input type="text" id="sm-qty" placeholder="0"></div>
+      </div>
+      <div class="field-row">
+        <div class="field" id="sm-loc-wrap" style="display:none;"><label for="sm-loc">Site destination</label><select id="sm-loc">${locOpts}</select></div>
+        <div class="field"><label for="sm-ref">Référence (BL, motif…)</label><input type="text" id="sm-ref"></div>
+      </div>
+      <div id="sm-error"></div>
+      <button class="btn" data-action="stock-move" data-id="${it.id}">Valider le mouvement</button>
+      <div class="hint">Réception/Retour augmentent la quantité, Sortie la diminue, Ajustement fixe la valeur exacte, Transfert change le site.</div>
+    </div>`;
+  }
+  return `<div class="detail-header"><div><span class="ticket-id">${esc(it.sku||"")}</span><h2>${esc(it.name)}</h2>
+      <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;"><span class="badge svc">${esc(it.category?it.category.name:"—")}</span><span>${it.location?esc(it.location.name):""}</span><span>Seuil min : ${esc(it.min_threshold||0)}</span></div></div>
+      <div style="display:flex;gap:8px;align-items:center;"><span class="badge ${low?'overdue':'closed'}">${esc(it.quantity)} ${esc(it.unit||"")}</span>${low?`<span class="badge overdue">Sous le seuil</span>`:""}</div></div>
+    <div class="two-col">${editable?moveCard:`<div class="card"><div class="section-label">Stock</div><div style="font-size:13.5px;">Quantité actuelle : <strong>${esc(it.quantity)} ${esc(it.unit||"")}</strong></div></div>`}
+      <div class="card"><div class="section-label">Mouvements</div>${moves?`<div class="thread">${moves}</div>`:`<div class="empty-state">Aucun mouvement.</div>`}</div>
+    </div>`;
+}
+function onStockTypeChange(){ const t=document.getElementById("sm-type").value; const w=document.getElementById("sm-loc-wrap"); if(w) w.style.display = t==="transfer"?"block":"none"; }
+
 // =========================== MAINTENANCE (admin) ===========================
 function renderMaintenance(){
   const sub=`<div class="subnav">
@@ -834,6 +954,8 @@ function bindEvents(){
   wire("af-status",e=>{state.assetFilter.status=e.target.value; render();});
   const af=document.getElementById("af-search");
   if(af){ af.addEventListener("input",e=>{state.assetFilter.search=e.target.value; render();}); af.focus(); af.setSelectionRange(af.value.length,af.value.length); }
+  const sts=document.getElementById("st-search");
+  if(sts){ sts.addEventListener("input",e=>{state.stockSearch=e.target.value; render();}); sts.focus(); sts.setSelectionRange(sts.value.length,sts.value.length); }
   wire("cf",e=>{state.customFrom=e.target.value; render();});
   wire("ct",e=>{state.customTo=e.target.value; render();});
   const fs=document.getElementById("f-search");
@@ -845,7 +967,7 @@ async function onAction(e){
   const busy=t=>{ el.disabled=true; if(el.tagName==="BUTTON"){ el.dataset._t=el.textContent; el.textContent=t; } };
   const unbusy=()=>{ el.disabled=false; if(el.dataset._t) el.textContent=el.dataset._t; };
 
-  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; state.staffNew=false; state.selectedAssetId=null; state.assetNew=false; if(el.dataset.view==="users"){state.usersLoaded=false;} if(el.dataset.view==="assets"){state.assetsLoaded=false;} render(); return; }
+  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; state.staffNew=false; state.selectedAssetId=null; state.assetNew=false; state.selectedStockId=null; state.stockNew=false; if(el.dataset.view==="users"){state.usersLoaded=false;} if(el.dataset.view==="assets"){state.assetsLoaded=false;} if(el.dataset.view==="stock"){state.stockLoaded=false;} render(); return; }
   if(action==="mon-nav"){ state.view=el.dataset.view; render(); return; }
   if(action==="refresh-now"){ busy("…"); try{ await reloadTickets(); state.lastSync=Date.now(); }catch(e){} render(); return; }
   if(action==="fullscreen"){ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(e){} return; }
@@ -974,6 +1096,50 @@ async function onAction(e){
       await sb.from("asset_movements").insert({ asset_id:id, type:"return", from_user_id:cur.assigned_user_id||null, from_status:cur.status, to_status:"In Stock", actor_id:uid() });
       await reloadAssets(); await loadAssetMovements(id); render();
     }catch(err){ alert(err.message||String(err)); unbusy(); } return;
+  }
+
+  // ---- Stock (Phase 2) ----
+  if(action==="stock-subview"){ state.stockSubview=el.dataset.view; render(); return; }
+  if(action==="stock-new"){ state.stockNew=true; state.selectedStockId=null; render(); return; }
+  if(action==="stock-cancel"){ state.stockNew=false; render(); return; }
+  if(action==="open-stock"){ state.selectedStockId=el.dataset.id; state.stockMoves=[]; render(); await loadStockMoves(el.dataset.id); return; }
+  if(action==="stock-back"){ state.selectedStockId=null; render(); return; }
+  if(action==="submit-stock"){
+    const name=document.getElementById("st-name").value.trim();
+    const sku=document.getElementById("st-sku").value.trim();
+    const category_id=document.getElementById("st-cat").value||null;
+    const location_id=document.getElementById("st-loc").value||null;
+    const quantity=parseInt(document.getElementById("st-qty").value||"0",10)||0;
+    const min_threshold=parseInt(document.getElementById("st-min").value||"0",10)||0;
+    const unit=document.getElementById("st-unit").value.trim();
+    const errBox=document.getElementById("st-error");
+    if(!name){ errBox.innerHTML=`<div class="error-msg">La désignation est obligatoire.</div>`; return; }
+    busy("Création…");
+    const { data:ins, error } = await sb.from("stock_items").insert({ name, sku, category_id, location_id, quantity, min_threshold, unit, is_active:true }).select().single();
+    if(error){ errBox.innerHTML=`<div class="error-msg">${esc(error.message)}</div>`; unbusy(); return; }
+    if(quantity>0){ await sb.from("stock_movements").insert({ item_id:ins.id, type:"receipt", qty:quantity, to_location_id:location_id, actor_id:uid(), reference:"Stock initial" }); }
+    await reloadStock(); state.stockNew=false; render(); return;
+  }
+  if(action==="stock-move"){
+    const id=el.dataset.id, it=state.stockItems.find(x=>x.id===id);
+    const type=document.getElementById("sm-type").value;
+    const qty=parseInt(document.getElementById("sm-qty").value||"0",10);
+    const reference=document.getElementById("sm-ref").value.trim();
+    const to_location_id=type==="transfer"?(document.getElementById("sm-loc").value||null):null;
+    const errBox=document.getElementById("sm-error");
+    if(!qty||qty<0){ errBox.innerHTML=`<div class="error-msg">Quantité invalide.</div>`; return; }
+    let newQty=Number(it.quantity);
+    if(type==="receipt"||type==="return") newQty+=qty;
+    else if(type==="issue"){ if(qty>newQty){ errBox.innerHTML=`<div class="error-msg">Stock insuffisant (disponible : ${newQty}).</div>`; return; } newQty-=qty; }
+    else if(type==="adjustment") newQty=qty;
+    busy("Validation…");
+    try{
+      const upd={ quantity:newQty }; if(type==="transfer"&&to_location_id) upd.location_id=to_location_id;
+      await sb.from("stock_items").update(upd).eq("id",id);
+      await sb.from("stock_movements").insert({ item_id:id, type, qty, from_location_id:it.location_id||null, to_location_id, actor_id:uid(), reference });
+      await reloadStock(); await loadStockMoves(id); render();
+    }catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); }
+    return;
   }
 
   // ---- Maintenance ----
