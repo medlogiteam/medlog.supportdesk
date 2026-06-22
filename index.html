@@ -336,7 +336,7 @@ function renderApp(){
   if(state.profile && isMonitor() && !state.booting && !state.loadError){
     return `${renderHeader()}<div class="monitor-wrap">${renderMain()}</div>`;
   }
-  return `${renderHeader()}<main>${renderMain()}</main><footer class="app-footer">MEDLOG IT Ops</footer>`;
+  return `${renderHeader()}<main>${renderMain()}</main><footer class="app-footer">MEDLOG IT Ops — Phase 1 (Supabase)</footer>`;
 }
 function renderHeader(){
   let nav="", session="";
@@ -461,11 +461,11 @@ async function loadExec(){
   try{
     const soon=new Date(); soon.setDate(soon.getDate()+30); const soonISO=soon.toISOString().slice(0,10); const todayISO=new Date().toISOString().slice(0,10);
     const [assets, stock, prs, pos, projects] = await Promise.all([
-      sb.from("assets").select("id,status,warranty_expiry,assigned_user_id"),
-      sb.from("stock_items").select("id,quantity,min_threshold").eq("is_active",true),
+      sb.from("assets").select("id,name,asset_tag,status,warranty_expiry,assigned_user_id"),
+      sb.from("stock_items").select("id,name,quantity,min_threshold,unit").eq("is_active",true),
       sb.from("purchase_requests").select("id,status,estimated_cost"),
-      sb.from("purchase_orders").select("id,status,amount"),
-      sb.from("projects").select("id,status,progress_pct,end_date")
+      sb.from("purchase_orders").select("id,po_no,status,amount"),
+      sb.from("projects").select("id,project_no,name,status,progress_pct,end_date")
     ]);
     state.execData={
       assets:assets.data||[], stock:stock.data||[], prs:prs.data||[], pos:pos.data||[], projects:projects.data||[],
@@ -524,9 +524,34 @@ function renderExec(){
   </div>`;
 
   return `<h1 class="page-title">Tableau de bord — Direction</h1><p class="page-sub">Vue consolidée de l'exploitation IT, tous modules. <button class="link" data-action="exec-refresh">actualiser</button></p>
+    ${renderExecAlerts(d)}
     ${ticketsSec}${assetsSec}${stockSec}${procSec}${projSec}
     <h2 class="page-sub" style="margin-top:8px;font-weight:600;">Répartitions</h2>
     ${charts}`;
+}
+function renderExecAlerts(d){
+  const tk=state.tickets||[];
+  const today=d.todayISO, soon=d.soonISO;
+  const overdue=tk.filter(isOverdue).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at));
+  const expired=d.assets.filter(a=>a.warranty_expiry && a.warranty_expiry<today);
+  const expiring=d.assets.filter(a=>a.warranty_expiry && a.warranty_expiry>=today && a.warranty_expiry<=soon);
+  const low=d.stock.filter(s=>Number(s.quantity)<Number(s.min_threshold||0));
+  const lateProj=d.projects.filter(p=>p.end_date && p.status!=="Completed" && p.status!=="Cancelled" && p.end_date<today);
+  const groups=[
+    { t:"Tickets en retard", items:overdue.map(x=>`${esc(x.ticket_no||"")} — ${esc(x.subject)}`), c:"#d9534f" },
+    { t:"Garanties expirées", items:expired.map(a=>`${esc(a.name)} (${esc(a.asset_tag||"")})`), c:"#d9534f" },
+    { t:"Garanties < 30 jours", items:expiring.map(a=>`${esc(a.name)} — échéance ${esc(a.warranty_expiry)}`), c:"#e0a800" },
+    { t:"Stock sous le seuil", items:low.map(s=>`${esc(s.name)} : ${esc(s.quantity)} ${esc(s.unit||"")} (min ${esc(s.min_threshold)})`), c:"#e0a800" },
+    { t:"Projets en retard", items:lateProj.map(p=>`${esc(p.name)} — échéance ${esc(p.end_date)}`), c:"#d9534f" },
+  ].filter(g=>g.items.length);
+  const total=groups.reduce((a,g)=>a+g.items.length,0);
+  if(!total) return `<div class="card" style="margin-bottom:16px;border-left:4px solid #2e9e5b;"><div class="section-label">Centre d'alertes</div><div style="font-size:13.5px;color:#1e7e34;">Aucune alerte active. Tout est sous contrôle. ✅</div></div>`;
+  const block=g=>{
+    const shown=g.items.slice(0,5).map(x=>`<li style="margin:2px 0;">${x}</li>`).join("");
+    const more=g.items.length>5?`<li style="list-style:none;color:var(--ink-soft);font-size:12px;">+ ${g.items.length-5} autre(s)…</li>`:"";
+    return `<div style="margin-bottom:10px;"><div style="font-weight:600;font-size:13px;color:${g.c};display:flex;align-items:center;gap:8px;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${g.c};"></span>${g.t} <span style="color:var(--ink-soft);font-weight:400;">(${g.items.length})</span></div><ul style="margin:4px 0 0 18px;font-size:13px;">${shown}${more}</ul></div>`;
+  };
+  return `<div class="card" style="margin-bottom:16px;border-left:4px solid #d9534f;"><div class="section-label">Centre d'alertes — ${total} point(s) à traiter</div>${groups.map(block).join("")}</div>`;
 }
 
 // =========================== TICKETS ===========================
@@ -558,10 +583,10 @@ function renderNewTicketForm(){
   const prioOpts=getPriorities().map(p=>`<option value="${esc(p)}" ${p==="Low"?"selected":""}>${esc(p)}</option>`).join("");
   let medlogix="";
   if(state.newService==="MEDLOGIX"){
-    const mods=Object.keys(MODULE_TREE);
+    const mods=lkVals("medlogix_module", Object.keys(MODULE_TREE));
     medlogix=`<div class="field-row">
       <div class="field"><label for="t-module">Module</label><select id="t-module" onchange="onModuleChange()">${mods.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join("")}</select></div>
-      <div class="field"><label for="t-screen">Écran / Fenêtre</label><select id="t-screen">${MODULE_TREE[mods[0]].map(w=>`<option value="${esc(w)}">${esc(w)}</option>`).join("")}</select></div></div>`;
+      <div class="field"><label for="t-screen">Écran / Fenêtre</label><select id="t-screen">${(MODULE_TREE[mods[0]]||[]).map(w=>`<option value="${esc(w)}">${esc(w)}</option>`).join("")}</select></div></div>`;
   }
   return `<h1 class="page-title">Nouveau ticket</h1><p class="page-sub">Décrivez votre demande ou incident IT.</p>
     <div class="card">
@@ -904,7 +929,7 @@ function renderStockForm(){
         <div class="field"><label for="st-qty">Quantité initiale</label><input type="text" id="st-qty" placeholder="0"></div>
         <div class="field"><label for="st-min">Seuil minimum</label><input type="text" id="st-min" placeholder="0"></div>
       </div>
-      <div class="field" style="max-width:200px;"><label for="st-unit">Unité</label><input type="text" id="st-unit" placeholder="pièce, m, boîte…"></div>
+      <div class="field" style="max-width:220px;"><label for="st-unit">Unité</label><select id="st-unit">${lkVals("stock_unit",["pièce","boîte","mètre","kilogramme","litre","rouleau","paquet","lot"]).map(u=>`<option value="${esc(u)}">${esc(u)}</option>`).join("")}</select></div>
       <div id="st-error"></div>
       <button class="btn" data-action="submit-stock">Créer l'article</button>
     </div>`;
@@ -1485,14 +1510,15 @@ function maintAnnonces(){
     <div class="section-label">Annonces actives</div>${list.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucune annonce active.</div>`}`;
 }
 function maintDictionnaire(){
-  const types=[["service","Services"],["priority","Priorités"]];
+  const types=[["service","Services"],["priority","Priorités"],["stock_unit","Unités de stock"],["medlogix_module","Modules MEDLOGIX"]];
+  const typeLabel=(types.find(t=>t[0]===state.lookupType)||["",state.lookupType])[1];
   const typeBtns=types.map(([v,l])=>`<button class="btn tiny ${state.lookupType===v?'':'secondary'}" data-action="lookup-type" data-type="${v}">${l}</button>`).join(" ");
   const items=state.lookups.filter(l=>l.type===state.lookupType).sort((a,b)=>(a.sort_order||0)-(b.sort_order||0));
   const rows=items.map(l=>`<div class="ticket-row" style="cursor:default;border-left-color:var(--brand-2);"><div class="col-main"><div class="subject">${esc(l.value)}</div></div><div class="col-status"><div class="btn-row"><button class="btn tiny danger" data-action="del-lookup" data-id="${l.id}">Supprimer</button></div></div></div>`).join("");
-  return `<div class="card" style="margin-bottom:16px;"><div class="section-label">Liste à gérer</div><div class="btn-row">${typeBtns}</div>
-      <div class="hint">Les statuts du workflow (Pending → In Progress → Testing → Closed / Reopened) restent fixes.</div></div>
+  return `<div class="card" style="margin-bottom:16px;"><div class="section-label">Liste à gérer</div><div class="btn-row" style="flex-wrap:wrap;">${typeBtns}</div>
+      <div class="hint">Les statuts du workflow (Pending → In Progress → Testing → Closed / Reopened) restent fixes. Standardiser ces listes fiabilise les statistiques du tableau de bord.</div></div>
     <div class="card" style="margin-bottom:20px;"><div class="section-label">Ajouter une valeur</div><div class="btn-row"><input type="text" id="lk-value" placeholder="Nouvelle valeur" style="max-width:380px;"><button class="btn" data-action="create-lookup">Ajouter</button></div><div id="lk-error"></div></div>
-    <div class="section-label">Valeurs — ${state.lookupType==='service'?'Services':'Priorités'}</div>${items.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucune valeur.</div>`}`;
+    <div class="section-label">Valeurs — ${esc(typeLabel)}</div>${items.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucune valeur.</div>`}`;
 }
 
 // =========================== MONITORING (mur d'écran) ===========================
