@@ -201,7 +201,8 @@ let state = {
   selectedStockId:null, stockNew:false,
   prs:[], prLoaded:false, prItems:[], selectedPrId:null, prNew:false, prDraftItems:[], departments:[], departmentsLoaded:false,
   pos:[], vendors:[], vendorsLoaded:false, procSubview:"requests", selectedPoId:null, poItems:[],
-  poReceipts:[], receivedByItem:{}, poReceiving:false
+  poReceipts:[], receivedByItem:{}, poReceiving:false,
+  projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[]
 };
 
 // --- Utilitaires ---
@@ -222,6 +223,8 @@ function canViewStock(){ return ["admin","it_manager","asset_manager","store_kee
 function canMoveStock(){ return ["admin","asset_manager","store_keeper"].includes(roleName()); }
 function canViewProcurement(){ return ["admin","it_manager","buyer"].includes(roleName()); }
 function canCreatePr(){ return ["admin","it_manager","buyer"].includes(roleName()); }
+function canViewProjects(){ return ["admin","it_manager","project_manager"].includes(roleName()); }
+function canManageProjects(){ return ["admin","project_manager"].includes(roleName()); }
 function canCreate(){ return roleName() && roleName()!=="viewer"; }
 function uid(){ return state.session ? state.session.user.id : null; }
 function displayName(p){ if(!p) return ""; const fl=[p.first_name,p.last_name].filter(Boolean).join(" ").trim(); return fl || p.full_name || p.email || ""; }
@@ -351,6 +354,7 @@ function renderHeader(){
     if(canViewAssets()) tabs.push(["assets","Actifs"]);
     if(canViewStock()) tabs.push(["stock","Stock"]);
     if(canViewProcurement()) tabs.push(["procurement","Achats"]);
+    if(canViewProjects()) tabs.push(["projects","Projets"]);
     if(isAdmin()){ tabs.push(["users","Utilisateurs"]); tabs.push(["maintenance","Maintenance"]); }
     nav=`<div class="topnav">${tabs.map(([v,l])=>`<button data-action="nav" data-view="${v}" class="${state.view===v?'active':''}">${l}</button>`).join("")}</div>`;
     session=`<div class="session-info"><span class="role-chip">${ROLE_LABEL[r]||r}</span>${esc(myName())}<button class="link" data-action="logout">déconnexion</button></div>`;
@@ -367,6 +371,7 @@ function renderMain(){
   if(state.view==="assets") return canViewAssets()?renderAssetsArea():renderDashboard();
   if(state.view==="stock") return canViewStock()?renderStockArea():renderDashboard();
   if(state.view==="procurement") return canViewProcurement()?renderProcurementArea():renderDashboard();
+  if(state.view==="projects") return canViewProjects()?renderProjectsArea():renderDashboard();
   if(state.view==="users") return isAdmin()?renderUsers():renderDashboard();
   if(state.view==="maintenance") return isAdmin()?renderMaintenance():renderDashboard();
   return "";
@@ -1076,6 +1081,202 @@ function onCvToggle(){
   const amt=document.getElementById("cv-amount"); if(amt) amt.value=t||"";
 }
 
+// =========================== PROJETS (Phase 4 — registre) ===========================
+function projectStatuses(){ return lkVals("project_status", ["Planned","In Progress","On Hold","Completed","Cancelled"]); }
+const TASK_STATUSES=[["To Do","À faire"],["In Progress","En cours"],["Blocked","Bloquée"],["Done","Terminée"]];
+function taskStatusLabel(v){ const x=TASK_STATUSES.find(t=>t[0]===v); return x?x[1]:v; }
+function taskStatusBadge(s){ const map={"To Do":"pending","In Progress":"progress","Blocked":"reopened","Done":"closed"}; return `<span class="badge ${map[s]||'pending'}">${esc(taskStatusLabel(s))}</span>`; }
+function projectStatusLabel(v){ const l=state.lookups.find(x=>x.type==="project_status"&&x.value===v); return l?l.label:v; }
+function projectStatusBadge(s){
+  const map={"Planned":"pending","In Progress":"progress","On Hold":"testing","Completed":"closed","Cancelled":"reopened"};
+  return `<span class="badge ${map[s]||'pending'}">${esc(projectStatusLabel(s))}</span>`;
+}
+function progressBar(pct){
+  const v=Math.max(0,Math.min(100,Number(pct)||0));
+  return `<div style="background:var(--border);border-radius:6px;height:8px;overflow:hidden;min-width:120px;"><div style="height:100%;width:${v}%;background:var(--brand-2);"></div></div><span style="font-family:var(--mono);font-size:12px;">${v}%</span>`;
+}
+async function loadProjects(){
+  try{
+    const { data } = await sb.from("projects").select("*, manager:manager_id(full_name), location:location_id(name)").order("created_at",{ascending:false});
+    state.projects=data||[]; state.projectsLoaded=true;
+    if(!state.profilesList.length){ const {data:pl}=await sb.from("profiles").select("id, full_name, first_name, last_name, email").eq("is_active",true).order("full_name"); state.profilesList=pl||[]; }
+    if(!state.locations.length){ const {data:lo}=await sb.from("locations").select("*").eq("is_active",true).order("name"); state.locations=lo||[]; }
+    render();
+  }catch(e){ state.projects=[]; state.projectsLoaded=true; render(); }
+}
+async function reloadProjects(){
+  const { data } = await sb.from("projects").select("*, manager:manager_id(full_name), location:location_id(name)").order("created_at",{ascending:false});
+  state.projects=data||[];
+}
+function renderProjectsArea(){
+  if(!state.projectsLoaded){ loadProjects(); return `<div class="empty-state">Chargement des projets…</div>`; }
+  if(state.selectedProjectId){ const pr=state.projects.find(x=>x.id===state.selectedProjectId); if(pr) return `<button class="back-link" data-action="project-back">&larr; Retour</button>`+renderProjectDetail(pr); state.selectedProjectId=null; }
+  if(state.projectNew && canManageProjects()) return `<button class="back-link" data-action="project-cancel">&larr; Retour aux projets</button>`+renderProjectForm();
+  return renderProjectList();
+}
+function renderProjectList(){
+  const f=state.projectFilter;
+  const statusOpts=["all",...projectStatuses()].map(s=>`<option value="${esc(s)}" ${f.status===s?'selected':''}>${s==='all'?'Tous statuts':esc(projectStatusLabel(s))}</option>`).join("");
+  let list=state.projects.slice();
+  if(f.status!=="all") list=list.filter(p=>p.status===f.status);
+  if(f.search.trim()){ const q=f.search.toLowerCase(); list=list.filter(p=>(p.name||"").toLowerCase().includes(q)||(p.project_no||"").toLowerCase().includes(q)); }
+  const newBtn=canManageProjects()?`<button class="btn secondary" data-action="project-new">+ Nouveau projet</button>`:"";
+  const rows=list.map(p=>`<div class="ticket-row" data-action="open-project" data-id="${p.id}">
+    <div class="col-main"><div class="subject">${esc(p.name)} <span class="ticket-id">${esc(p.project_no||"")}</span></div>
+      <div class="meta"><span>${p.manager?("Chef : "+esc(p.manager.full_name)):""}</span>${p.location?`<span>${esc(p.location.name)}</span>`:""}${p.end_date?`<span>Échéance ${esc(p.end_date)}</span>`:""}</div>
+      <div class="meta" style="margin-top:6px;display:flex;align-items:center;gap:8px;">${progressBar(p.progress_pct)}</div></div>
+    <div class="col-status">${p.priority?`<span class="badge priority-${p.priority}">${esc(p.priority)}</span>`:""}${projectStatusBadge(p.status)}</div></div>`).join("");
+  return `<h1 class="page-title">Projets</h1><p class="page-sub">${state.projects.length} projet(s).</p>
+    <div class="filters">
+      <div class="field"><label>Statut</label><select id="pj-status">${statusOpts}</select></div>
+      <div class="field search"><label>Recherche</label><input type="text" id="pj-search" placeholder="Nom, numéro…" value="${esc(f.search)}"></div>
+      ${newBtn}
+    </div>
+    ${list.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucun projet.</div>`}`;
+}
+function renderProjectForm(){
+  const mgrOpts=`<option value="">— chef de projet —</option>`+state.profilesList.map(p=>`<option value="${p.id}">${esc(displayName(p))}</option>`).join("");
+  const locOpts=`<option value="">— site —</option>`+state.locations.map(l=>`<option value="${l.id}">${esc(l.name)}</option>`).join("");
+  const statusOpts=projectStatuses().map(s=>`<option value="${esc(s)}" ${s==="Planned"?"selected":""}>${esc(projectStatusLabel(s))}</option>`).join("");
+  const prioOpts=getPriorities().map(p=>`<option value="${esc(p)}" ${p==="Medium"?"selected":""}>${esc(p)}</option>`).join("");
+  return `<h1 class="page-title">Nouveau projet</h1><p class="page-sub">Définir un projet et son pilotage.</p>
+    <div class="card">
+      <div class="field"><label for="pj-name">Nom du projet</label><input type="text" id="pj-name" placeholder="ex : Renouvellement parc Kribi"></div>
+      <div class="field"><label for="pj-desc">Description</label><textarea id="pj-desc" placeholder="Objectif et périmètre."></textarea></div>
+      <div class="field-row">
+        <div class="field"><label for="pj-mgr">Chef de projet</label><select id="pj-mgr">${mgrOpts}</select></div>
+        <div class="field"><label for="pj-loc">Site</label><select id="pj-loc">${locOpts}</select></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="pj-start">Début</label><input type="date" id="pj-start"></div>
+        <div class="field"><label for="pj-end">Échéance</label><input type="date" id="pj-end"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="pj-status-new">Statut</label><select id="pj-status-new">${statusOpts}</select></div>
+        <div class="field"><label for="pj-prio">Priorité</label><select id="pj-prio">${prioOpts}</select></div>
+      </div>
+      <div id="pj-error"></div>
+      <button class="btn" data-action="submit-project">Créer le projet</button>
+    </div>`;
+}
+function renderProjectDetail(p){
+  const manage=canManageProjects();
+  const statusOpts=projectStatuses().map(s=>`<option value="${esc(s)}" ${p.status===s?'selected':''}>${esc(projectStatusLabel(s))}</option>`).join("");
+  const late = p.end_date && p.status!=="Completed" && p.status!=="Cancelled" && new Date(p.end_date) < new Date();
+  return `<div class="detail-header"><div><span class="ticket-id">${esc(p.project_no||"")}</span><h2>${esc(p.name)}</h2>
+      <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;">${p.manager?`<span>Chef : ${esc(p.manager.full_name)}</span>`:""}${p.location?`<span>${esc(p.location.name)}</span>`:""}${p.start_date?`<span>Début ${esc(p.start_date)}</span>`:""}${p.end_date?`<span>Échéance ${esc(p.end_date)}</span>`:""}</div></div>
+      <div style="display:flex;gap:8px;align-items:center;">${p.priority?`<span class="badge priority-${p.priority}">${esc(p.priority)}</span>`:""}${projectStatusBadge(p.status)}${late?`<span class="badge overdue">En retard</span>`:""}</div></div>
+    <div class="two-col">
+      <div class="card"><div class="section-label">Présentation</div>
+        <div style="font-size:13.5px;line-height:1.8;">${p.description?esc(p.description):"<span style='color:var(--ink-soft)'>Aucune description.</span>"}</div>
+        <div style="margin-top:14px;display:flex;align-items:center;gap:10px;">${progressBar(p.progress_pct)}</div>
+      </div>
+      ${manage?`<div class="card"><div class="section-label">Pilotage</div>
+        <div class="field"><label for="pj-status-upd">Statut</label><div class="btn-row"><select id="pj-status-upd" style="max-width:200px;">${statusOpts}</select><button class="btn tiny" data-action="project-status" data-id="${p.id}">Appliquer</button></div></div>
+        <div class="field" style="margin-top:10px;"><label for="pj-prog">Avancement (%)</label><div class="btn-row"><input type="text" id="pj-prog" value="${Number(p.progress_pct)||0}" style="max-width:100px;"><button class="btn tiny" data-action="project-progress" data-id="${p.id}">Mettre à jour</button></div></div>
+      </div>`:""}
+    </div>
+    ${renderProjectTasks(p)}`;
+}
+
+async function loadProjectTasks(pid){
+  const { data } = await sb.from("project_tasks").select("*").eq("project_id",pid).order("start_date",{ascending:true,nullsFirst:false});
+  state.projectTasks=data||[];
+  if(state.selectedProjectId===pid) render();
+}
+function renderProjectTasks(p){
+  const manage=canManageProjects();
+  const tasks=(state.projectTasks||[]);
+  const taskRows=tasks.map(t=>{
+    const dep = t.depends_on_task_id ? (tasks.find(x=>x.id===t.depends_on_task_id)||{}).name : null;
+    const ctrl = manage ? `<div class="btn-row" style="margin-top:6px;flex-wrap:wrap;">
+        <select id="tk-st-${t.id}" style="font-size:12px;padding:4px 6px;">${TASK_STATUSES.map(([v,l])=>`<option value="${v}" ${t.status===v?'selected':''}>${l}</option>`).join("")}</select>
+        <button class="btn tiny secondary" data-action="task-status" data-id="${t.id}">Statut</button>
+        <input type="text" id="tk-pg-${t.id}" value="${Number(t.progress_pct)||0}" style="width:60px;font-size:12px;padding:4px 6px;">
+        <button class="btn tiny secondary" data-action="task-progress" data-id="${t.id}">%</button>
+        <button class="btn tiny danger" data-action="task-del" data-id="${t.id}">Suppr.</button>
+      </div>` : "";
+    return `<div class="ticket-row" style="cursor:default;display:block;">
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <div class="col-main"><div class="subject">${esc(t.name)}</div>
+          <div class="meta"><span>${t.assignee_id?esc(userName(t.assignee_id)):"Non affectée"}</span>${t.start_date?`<span>${esc(t.start_date)} → ${esc(t.end_date||"?")}</span>`:""}${dep?`<span>après : ${esc(dep)}</span>`:""}</div>
+          <div class="meta" style="margin-top:6px;display:flex;align-items:center;gap:8px;">${progressBar(t.progress_pct)}</div></div>
+        <div class="col-status">${taskStatusBadge(t.status)}</div>
+      </div>${ctrl}</div>`;
+  }).join("");
+  let addForm="";
+  if(manage){
+    const asgOpts=`<option value="">— responsable —</option>`+state.profilesList.map(u=>`<option value="${u.id}">${esc(displayName(u))}</option>`).join("");
+    const depOpts=`<option value="">— aucune dépendance —</option>`+tasks.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join("");
+    const stOpts=TASK_STATUSES.map(([v,l])=>`<option value="${v}" ${v==="To Do"?"selected":""}>${l}</option>`).join("");
+    addForm=`<div class="card" style="margin-top:12px;background:var(--surface-2,#fafbfc);"><div class="section-label">Ajouter une tâche</div>
+      <div class="field"><label for="tk-name">Intitulé</label><input type="text" id="tk-name" placeholder="ex : Câblage salle serveur"></div>
+      <div class="field-row">
+        <div class="field"><label for="tk-asg">Responsable</label><select id="tk-asg">${asgOpts}</select></div>
+        <div class="field"><label for="tk-dep">Dépend de</label><select id="tk-dep">${depOpts}</select></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="tk-start">Début</label><input type="date" id="tk-start"></div>
+        <div class="field"><label for="tk-end">Fin</label><input type="date" id="tk-end"></div>
+      </div>
+      <div class="field" style="max-width:220px;"><label for="tk-status">Statut</label><select id="tk-status">${stOpts}</select></div>
+      <div id="tk-error"></div>
+      <button class="btn" data-action="task-add" data-id="${p.id}">Ajouter la tâche</button>
+    </div>`;
+  }
+  return `<div class="card" style="margin-top:16px;"><div class="section-label">Planning (Gantt)</div>${renderGantt(tasks)}</div>
+    <div class="card" style="margin-top:16px;"><div class="section-label">Tâches (${tasks.length})</div>
+      ${tasks.length?`<div class="ticket-list">${taskRows}</div>`:`<div class="empty-state">Aucune tâche.</div>`}
+      ${addForm}
+    </div>`;
+}
+function renderGantt(tasks){
+  const toD = s => new Date(s+"T00:00:00").getTime();
+  const dated = tasks.filter(t=>t.start_date && t.end_date && toD(t.end_date)>=toD(t.start_date));
+  if(!dated.length) return `<div class="hint">Ajoutez des dates de début et de fin aux tâches pour afficher la frise.</div>`;
+  const DAY=86400000, dayW=18, rowH=34, labelW=180, headH=22;
+  let min=Math.min(...dated.map(t=>toD(t.start_date))), max=Math.max(...dated.map(t=>toD(t.end_date)));
+  const totalDays=Math.round((max-min)/DAY)+1, chartW=totalDays*dayW, chartH=dated.length*rowH;
+  const idx={}; dated.forEach((t,i)=>idx[t.id]=i);
+  const xOf=d=>Math.round((toD(d)-min)/DAY)*dayW;
+  const wOf=(s,e)=>(Math.round((toD(e)-toD(s))/DAY)+1)*dayW;
+  let grid="", labels="";
+  for(let d=0; d<totalDays; d+=7){ const dt=new Date(min+d*DAY);
+    grid+=`<div style="position:absolute;left:${d*dayW}px;top:0;height:${headH+chartH}px;border-left:1px solid var(--border);"></div>`;
+    labels+=`<div style="position:absolute;left:${d*dayW+3}px;top:4px;font-size:10px;color:var(--ink-soft);white-space:nowrap;">${dt.getDate()}/${dt.getMonth()+1}</div>`;
+  }
+  const bars=dated.map((t,i)=>{
+    const x=xOf(t.start_date), w=Math.max(dayW,wOf(t.start_date,t.end_date)), y=i*rowH+7;
+    const pct=Math.max(0,Math.min(100,Number(t.progress_pct)||0));
+    const col=t.status==="Done"?"#1e7e34":(t.status==="Blocked"?"#c0392b":"var(--brand-2)");
+    return `<div title="${esc(t.name)}" style="position:absolute;left:${x}px;top:${y}px;width:${w}px;height:20px;background:var(--border);border-radius:4px;overflow:hidden;"><div style="height:100%;width:${pct}%;background:${col};"></div></div>`;
+  }).join("");
+  let arrows="";
+  dated.forEach((t,i)=>{
+    if(t.depends_on_task_id && idx[t.depends_on_task_id]!==undefined){
+      const di=idx[t.depends_on_task_id], dep=dated[di];
+      const x1=xOf(dep.start_date)+Math.max(dayW,wOf(dep.start_date,dep.end_date)), y1=di*rowH+17;
+      const x2=xOf(t.start_date), y2=i*rowH+17;
+      arrows+=`<path d="M${x1},${y1} C${x1+14},${y1} ${x2-14},${y2} ${x2},${y2}" fill="none" stroke="#999" stroke-width="1.4" marker-end="url(#ga)"/>`;
+    }
+  });
+  const names=dated.map(t=>`<div style="height:${rowH}px;display:flex;align-items:center;font-size:12.5px;padding:0 8px;border-bottom:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t.name)}</div>`).join("");
+  return `<div style="display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+    <div style="width:${labelW}px;flex:0 0 ${labelW}px;border-right:1px solid var(--border);">
+      <div style="height:${headH}px;border-bottom:1px solid var(--border);background:var(--surface-2,#f7f9fb);"></div>${names}
+    </div>
+    <div style="overflow-x:auto;flex:1;">
+      <div style="position:relative;width:${chartW}px;height:${headH+chartH}px;">
+        ${grid}${labels}
+        <div style="position:absolute;left:0;top:${headH}px;width:${chartW}px;height:${chartH}px;">
+          <svg width="${chartW}" height="${chartH}" style="position:absolute;left:0;top:0;pointer-events:none;"><defs><marker id="ga" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#999"/></marker></defs>${arrows}</svg>
+          ${bars}
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
 // =========================== MAINTENANCE (admin) ===========================
 function renderMaintenance(){
   const sub=`<div class="subnav">
@@ -1274,6 +1475,9 @@ function bindEvents(){
   if(af){ af.addEventListener("input",e=>{state.assetFilter.search=e.target.value; render();}); af.focus(); af.setSelectionRange(af.value.length,af.value.length); }
   const sts=document.getElementById("st-search");
   if(sts){ sts.addEventListener("input",e=>{state.stockSearch=e.target.value; render();}); sts.focus(); sts.setSelectionRange(sts.value.length,sts.value.length); }
+  wire("pj-status",e=>{state.projectFilter.status=e.target.value; render();});
+  const pjs=document.getElementById("pj-search");
+  if(pjs){ pjs.addEventListener("input",e=>{state.projectFilter.search=e.target.value; render();}); pjs.focus(); pjs.setSelectionRange(pjs.value.length,pjs.value.length); }
   wire("cf",e=>{state.customFrom=e.target.value; render();});
   wire("ct",e=>{state.customTo=e.target.value; render();});
   const fs=document.getElementById("f-search");
@@ -1285,7 +1489,7 @@ async function onAction(e){
   const busy=t=>{ el.disabled=true; if(el.tagName==="BUTTON"){ el.dataset._t=el.textContent; el.textContent=t; } };
   const unbusy=()=>{ el.disabled=false; if(el.dataset._t) el.textContent=el.dataset._t; };
 
-  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; state.staffNew=false; state.selectedAssetId=null; state.assetNew=false; state.selectedStockId=null; state.stockNew=false; state.selectedPrId=null; state.prNew=false; state.prDraftItems=[]; state.selectedPoId=null; if(el.dataset.view==="users"){state.usersLoaded=false;} if(el.dataset.view==="assets"){state.assetsLoaded=false;} if(el.dataset.view==="stock"){state.stockLoaded=false;} if(el.dataset.view==="procurement"){state.prLoaded=false;} if(el.dataset.view==="maintenance"){state.locationsLoaded=false; state.departmentsLoaded=false; state.vendorsLoaded=false;} render(); return; }
+  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; state.staffNew=false; state.selectedAssetId=null; state.assetNew=false; state.selectedStockId=null; state.stockNew=false; state.selectedPrId=null; state.prNew=false; state.prDraftItems=[]; state.selectedPoId=null; if(el.dataset.view==="users"){state.usersLoaded=false;} if(el.dataset.view==="assets"){state.assetsLoaded=false;} if(el.dataset.view==="stock"){state.stockLoaded=false;} if(el.dataset.view==="procurement"){state.prLoaded=false;} if(el.dataset.view==="projects"){state.projectsLoaded=false; state.selectedProjectId=null; state.projectNew=false;} if(el.dataset.view==="maintenance"){state.locationsLoaded=false; state.departmentsLoaded=false; state.vendorsLoaded=false;} render(); return; }
   if(action==="mon-nav"){ state.view=el.dataset.view; render(); return; }
   if(action==="refresh-now"){ busy("…"); try{ await reloadTickets(); state.lastSync=Date.now(); }catch(e){} render(); return; }
   if(action==="fullscreen"){ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(e){} return; }
@@ -1587,6 +1791,75 @@ async function onAction(e){
       await reloadStock(); await loadStockMoves(id); render();
     }catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); }
     return;
+  }
+
+  // ---- Projets (Phase 4) ----
+  if(action==="project-new"){ state.projectNew=true; state.selectedProjectId=null; render(); return; }
+  if(action==="project-cancel"){ state.projectNew=false; render(); return; }
+  if(action==="open-project"){ state.selectedProjectId=el.dataset.id; state.projectTasks=[]; render(); await loadProjectTasks(el.dataset.id); return; }
+  if(action==="project-back"){ state.selectedProjectId=null; render(); return; }
+  if(action==="submit-project"){
+    const name=document.getElementById("pj-name").value.trim();
+    const description=document.getElementById("pj-desc").value.trim();
+    const manager_id=document.getElementById("pj-mgr").value||null;
+    const location_id=document.getElementById("pj-loc").value||null;
+    const start_date=document.getElementById("pj-start").value||null;
+    const end_date=document.getElementById("pj-end").value||null;
+    const status=document.getElementById("pj-status-new").value;
+    const priority=document.getElementById("pj-prio").value;
+    const errBox=document.getElementById("pj-error");
+    if(!name){ errBox.innerHTML=`<div class="error-msg">Le nom du projet est obligatoire.</div>`; return; }
+    if(start_date && end_date && end_date<start_date){ errBox.innerHTML=`<div class="error-msg">L'échéance ne peut pas précéder la date de début.</div>`; return; }
+    busy("Création…");
+    const { error } = await sb.from("projects").insert({ name, description, manager_id, location_id, start_date, end_date, status, priority, owner_id:uid(), progress_pct:0 });
+    if(error){ errBox.innerHTML=`<div class="error-msg">${esc(error.message)}</div>`; unbusy(); return; }
+    await reloadProjects(); state.projectNew=false; render(); return;
+  }
+  if(action==="project-status"){
+    const id=el.dataset.id, status=document.getElementById("pj-status-upd").value;
+    busy("…");
+    try{ await sb.from("projects").update({status}).eq("id",id); await reloadProjects(); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); } return;
+  }
+  if(action==="project-progress"){
+    const id=el.dataset.id; let v=parseInt(document.getElementById("pj-prog").value||"0",10); if(isNaN(v))v=0; v=Math.max(0,Math.min(100,v));
+    busy("…");
+    try{ await sb.from("projects").update({progress_pct:v}).eq("id",id); await reloadProjects(); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); } return;
+  }
+  if(action==="task-add"){
+    const pid=el.dataset.id;
+    const name=document.getElementById("tk-name").value.trim();
+    const assignee_id=document.getElementById("tk-asg").value||null;
+    const depends_on_task_id=document.getElementById("tk-dep").value||null;
+    const start_date=document.getElementById("tk-start").value||null;
+    const end_date=document.getElementById("tk-end").value||null;
+    const status=document.getElementById("tk-status").value;
+    const errBox=document.getElementById("tk-error");
+    if(!name){ errBox.innerHTML=`<div class="error-msg">L'intitulé de la tâche est obligatoire.</div>`; return; }
+    if(start_date && end_date && end_date<start_date){ errBox.innerHTML=`<div class="error-msg">La fin ne peut pas précéder le début.</div>`; return; }
+    busy("Ajout…");
+    const { error } = await sb.from("project_tasks").insert({ project_id:pid, name, assignee_id, depends_on_task_id, start_date, end_date, status, progress_pct:0 });
+    if(error){ errBox.innerHTML=`<div class="error-msg">${esc(error.message)}</div>`; unbusy(); return; }
+    await loadProjectTasks(pid); return;
+  }
+  if(action==="task-status"){
+    const id=el.dataset.id, status=document.getElementById("tk-st-"+id).value;
+    busy("…");
+    try{ await sb.from("project_tasks").update({status}).eq("id",id); await loadProjectTasks(state.selectedProjectId); }
+    catch(err){ alert(err.message||String(err)); unbusy(); } return;
+  }
+  if(action==="task-progress"){
+    const id=el.dataset.id; let v=parseInt(document.getElementById("tk-pg-"+id).value||"0",10); if(isNaN(v))v=0; v=Math.max(0,Math.min(100,v));
+    busy("…");
+    try{ await sb.from("project_tasks").update({progress_pct:v}).eq("id",id); await loadProjectTasks(state.selectedProjectId); }
+    catch(err){ alert(err.message||String(err)); unbusy(); } return;
+  }
+  if(action==="task-del"){
+    if(!confirm("Supprimer cette tâche ?")) return;
+    busy("…");
+    try{ await sb.from("project_tasks").delete().eq("id",el.dataset.id); await loadProjectTasks(state.selectedProjectId); }
+    catch(err){ alert(err.message||String(err)); unbusy(); } return;
   }
 
   // ---- Maintenance ----
