@@ -311,8 +311,9 @@ async function loadProfile(){
   state.profile = data;
 }
 async function loadData(){
-  const [tk, lk, an] = await Promise.all([ fetchTickets(), fetchLookups(), fetchAnnouncements() ]);
-  state.tickets=tk; state.lookups=lk; state.announcements=an;
+  const [tk, lk, an, profs] = await Promise.all([ fetchTickets(), fetchLookups(), fetchAnnouncements(),
+    sb.from("profiles").select("id, full_name, first_name, last_name, email").eq("is_active",true).order("full_name") ]);
+  state.tickets=tk; state.lookups=lk; state.announcements=an; state.profilesList=profs.data||[];
   if(!state.newService) state.newService = getServices()[0];
 }
 async function fetchTickets(){
@@ -586,7 +587,7 @@ function renderNewTicketForm(){
     const mods=lkVals("medlogix_module", Object.keys(MODULE_TREE));
     medlogix=`<div class="field-row">
       <div class="field"><label for="t-module">Module</label><select id="t-module" onchange="onModuleChange()">${mods.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join("")}</select></div>
-      <div class="field"><label for="t-screen">Écran / Fenêtre</label><select id="t-screen">${(MODULE_TREE[mods[0]]||[]).map(w=>`<option value="${esc(w)}">${esc(w)}</option>`).join("")}</select></div></div>`;
+      <div class="field"><label for="t-screen">Écran / Fenêtre</label><select id="t-screen">${screenOpts(mods[0]).map(w=>`<option value="${esc(w)}">${esc(w)}</option>`).join("")}</select></div></div>`;
   }
   return `<h1 class="page-title">Nouveau ticket</h1><p class="page-sub">Décrivez votre demande ou incident IT.</p>
     <div class="card">
@@ -600,7 +601,8 @@ function renderNewTicketForm(){
     </div>`;
 }
 function onServiceChange(){ state.newService=document.getElementById("t-service").value; render(); }
-function onModuleChange(){ const m=document.getElementById("t-module").value; document.getElementById("t-screen").innerHTML=(MODULE_TREE[m]||[]).map(w=>`<option value="${esc(w)}">${esc(w)}</option>`).join(""); }
+function screenOpts(m){ const base=MODULE_TREE[m]||[]; const extra=lkVals("medlogix_screen",[]); return Array.from(new Set([...base, ...extra])); }
+function onModuleChange(){ const m=document.getElementById("t-module").value; document.getElementById("t-screen").innerHTML=screenOpts(m).map(w=>`<option value="${esc(w)}">${esc(w)}</option>`).join(""); }
 function renderStaffTickets(){
   const f=state.filter;
   const statusOpts=["all",...STATUSES].map(s=>`<option value="${s}" ${f.status===s?'selected':''}>${s==='all'?'Tous statuts':s}</option>`).join("");
@@ -661,9 +663,19 @@ function renderTicketDetail(t){
   let staffControls="";
   if(isStaff()){
     const prioOpts=getPriorities().map(p=>`<option value="${p}" ${t.priority===p?'selected':''}>${p}</option>`).join("");
+    const userOpts=`<option value="">— choisir un utilisateur —</option>`+state.profilesList.map(u=>`<option value="${u.id}">${esc(displayName(u))}</option>`).join("");
     staffControls=`<div class="two-col" style="margin-bottom:20px;">
       <div class="card"><div class="section-label">Priorité</div><div class="btn-row"><select id="prio-select" style="max-width:200px;">${prioOpts}</select><button class="btn tiny" data-action="set-priority" data-id="${t.id}">Mettre à jour</button></div></div>
-      <div class="card"><div class="section-label">Affectation</div><div class="btn-row"><input type="text" id="assign-input" placeholder="nom de l'agent" value="${esc(t.assignee?t.assignee.full_name||'':'')}" style="max-width:240px;"><button class="btn tiny" data-action="assign" data-id="${t.id}">Affecter</button></div><div class="hint">Phase 1 : saisie libre (affectation par identité Supabase à venir).</div></div>
+      <div class="card"><div class="section-label">Affectation</div><div class="btn-row"><input type="text" id="assign-input" placeholder="nom de l'agent" value="${esc(t.assignee?t.assignee.full_name||'':'')}" style="max-width:240px;"><button class="btn tiny" data-action="assign" data-id="${t.id}">Affecter</button></div></div>
+    </div>
+    <div class="card" style="margin-bottom:20px;"><div class="section-label">Taguer un utilisateur (notification e-mail)</div>
+      <div class="field-row">
+        <div class="field"><label for="tag-user-select">Utilisateur à notifier</label><select id="tag-user-select">${userOpts}</select></div>
+        <div class="field"><label for="tag-user-msg">Message (optionnel)</label><input type="text" id="tag-user-msg" placeholder="Pourquoi vous le sollicitez…"></div>
+      </div>
+      <div id="tag-error"></div>
+      <div class="btn-row"><button class="btn tiny" data-action="tag-user" data-id="${t.id}">Notifier par e-mail</button></div>
+      <div class="hint">Un e-mail est envoyé à la personne pour attirer son attention sur ce ticket, et la mention est tracée dans l'historique.</div>
     </div>`;
   }
   return `<div class="detail-header"><div><span class="ticket-id">${esc(t.ticket_no||"")}</span><h2>${esc(t.subject)}</h2>
@@ -1510,7 +1522,7 @@ function maintAnnonces(){
     <div class="section-label">Annonces actives</div>${list.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucune annonce active.</div>`}`;
 }
 function maintDictionnaire(){
-  const types=[["service","Services"],["priority","Priorités"],["stock_unit","Unités de stock"],["medlogix_module","Modules MEDLOGIX"]];
+  const types=[["service","Services"],["priority","Priorités"],["stock_unit","Unités de stock"],["medlogix_module","Modules MEDLOGIX"],["medlogix_screen","Écrans MEDLOGIX"]];
   const typeLabel=(types.find(t=>t[0]===state.lookupType)||["",state.lookupType])[1];
   const typeBtns=types.map(([v,l])=>`<button class="btn tiny ${state.lookupType===v?'':'secondary'}" data-action="lookup-type" data-type="${v}">${l}</button>`).join(" ");
   const items=state.lookups.filter(l=>l.type===state.lookupType).sort((a,b)=>(a.sort_order||0)-(b.sort_order||0));
@@ -1699,8 +1711,25 @@ async function onAction(e){
     try{ await sb.from("ticket_activity").insert({ticket_id:id, actor_id:uid(), type:"assign", to_value:name}); await loadActivity(id); render(); }
     catch(err){ alert(err.message||String(err)); unbusy(); } return;
   }
-
-  // ---- Assets (Phase 2) ----
+  if(action==="tag-user"){
+    const id=el.dataset.id;
+    const recipient_id=document.getElementById("tag-user-select").value;
+    const message=(document.getElementById("tag-user-msg")||{}).value||"";
+    const box=document.getElementById("tag-error");
+    if(!recipient_id){ box.innerHTML=`<div class="error-msg">Choisissez un utilisateur à notifier.</div>`; return; }
+    const t=state.tickets.find(x=>x.id===id);
+    busy("Envoi de la notification…");
+    try{
+      const { data, error } = await sb.functions.invoke("notify-user", { body:{ recipient_id, ticket_id:id, ticket_no:t?t.ticket_no:"", subject:t?t.subject:"", message, tagger_name:myName() } });
+      if(error) throw error;
+      if(data && data.error) throw new Error(data.error);
+      await sb.from("ticket_activity").insert({ ticket_id:id, actor_id:uid(), type:"comment", comment:`🔔 ${userName(recipient_id)} a été notifié·e par e-mail${message?` : ${message}`:""}` });
+      await loadActivity(id); render();
+    }catch(err){
+      box.innerHTML=`<div class="error-msg">Notification non envoyée : ${esc(err.message||String(err))}.<br>Vérifiez que la fonction « notify-user » est déployée et que Resend est configuré (voir le guide).</div>`; unbusy();
+    }
+    return;
+  }
   if(action==="asset-new"){ state.assetNew=true; state.selectedAssetId=null; render(); return; }
   if(action==="asset-cancel"){ state.assetNew=false; render(); return; }
   if(action==="open-asset"){ state.selectedAssetId=el.dataset.id; state.assetMovements=[]; render(); await loadAssetMovements(el.dataset.id); return; }
