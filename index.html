@@ -351,32 +351,51 @@ function renderHeader(){
       <button class="link" data-action="logout">quitter</button></div>`;
   } else if(state.profile){
     const r=roleName();
-    const tabs=[["dashboard","Tableau de bord"]];
-    if(canViewExec()) tabs.push(["exec","Direction"]);
-    tabs.push(["tickets", r==="user"?"Mes tickets":"Tickets"]);
-    if(canViewAssets()) tabs.push(["assets","Actifs"]);
-    if(canViewStock()) tabs.push(["stock","Stock"]);
-    if(canViewProcurement()) tabs.push(["procurement","Achats"]);
-    if(canViewProjects()) tabs.push(["projects","Projets"]);
-    if(isAdmin()){ tabs.push(["users","Utilisateurs"]); tabs.push(["maintenance","Maintenance"]); }
-    nav=`<div class="topnav">${tabs.map(([v,l])=>`<button data-action="nav" data-view="${v}" class="${state.view===v?'active':''}">${l}</button>`).join("")}</div>`;
+    const groups=navGroups();
+    const active=g=>g.leaves.some(lf=>lf.v===state.view);
+    nav=`<div class="topnav">${groups.map(g=>{
+      const first=g.leaves.find(lf=>lf.show())||g.leaves[0];
+      return `<button data-action="nav" data-view="${first.v}" class="${active(g)?'active':''}">${g.label}</button>`;
+    }).join("")}</div>`;
     session=`<div class="session-info"><span class="role-chip">${ROLE_LABEL[r]||r}</span>${esc(myName())}<button class="link" data-action="logout">déconnexion</button></div>`;
   }
   return `<header class="topbar"><div class="brand"><div class="mark">ML</div><div><div class="name">MEDLOG IT Ops</div><div class="sub">${isMonitor()?"Monitoring":"Support Desk"}</div></div></div>${nav}${session}</header>`;
+}
+function navGroups(){
+  const r=roleName();
+  return [
+    { key:"board", label:"Tableau de bord", leaves:[
+        {v:"dashboard", l:"Opérationnel", show:()=>true},
+        {v:"exec", l:"Direction", show:()=>canViewExec()} ] },
+    { key:"tickets", label:(r==="user"?"Mes tickets":"Tickets"), leaves:[ {v:"tickets", l:"Tickets", show:()=>true} ] },
+    { key:"resources", label:"Ressources", leaves:[
+        {v:"assets", l:"Actifs", show:()=>canViewAssets()},
+        {v:"stock", l:"Stock", show:()=>canViewStock()},
+        {v:"procurement", l:"Achats", show:()=>canViewProcurement()} ] },
+    { key:"projects", label:"Projets", leaves:[ {v:"projects", l:"Projets", show:()=>canViewProjects()} ] },
+    { key:"maint", label:"Maintenance", leaves:[ {v:"maintenance", l:"Maintenance", show:()=>isAdmin()} ] },
+  ].filter(g=> g.leaves.some(lf=>lf.show()));
+}
+function sectionSubnav(){
+  const g=navGroups().find(x=>x.leaves.some(lf=>lf.v===state.view));
+  if(!g) return "";
+  const vis=g.leaves.filter(lf=>lf.show());
+  if(vis.length<2) return "";
+  return `<div class="subnav" style="margin-bottom:14px;">${vis.map(lf=>`<button data-action="nav" data-view="${lf.v}" class="${state.view===lf.v?'active':''}">${lf.l}</button>`).join("")}</div>`;
 }
 function renderMain(){
   if(state.booting) return `<div class="gate"><h1>Chargement…</h1><p>Connexion à la base sécurisée.</p></div>`;
   if(!state.session || !state.profile) return renderLogin();
   if(state.loadError) return `<div class="gate"><h1>Erreur de chargement</h1><div class="card"><div class="error-msg">${esc(state.loadError)}</div><button class="btn" data-action="retry" style="margin-top:12px;">Réessayer</button></div></div>`;
   if(isMonitor()) return state.view==="report" ? renderReport() : state.view==="announces" ? renderMonitorAnnonces() : renderMonitor();
-  if(state.view==="dashboard") return renderDashboard();
-  if(state.view==="exec") return canViewExec()?renderExec():renderDashboard();
+  const sub=sectionSubnav();
+  if(state.view==="dashboard") return sub+renderDashboard();
+  if(state.view==="exec") return canViewExec()?sub+renderExec():renderDashboard();
   if(state.view==="tickets") return renderTicketsArea();
-  if(state.view==="assets") return canViewAssets()?renderAssetsArea():renderDashboard();
-  if(state.view==="stock") return canViewStock()?renderStockArea():renderDashboard();
-  if(state.view==="procurement") return canViewProcurement()?renderProcurementArea():renderDashboard();
+  if(state.view==="assets") return canViewAssets()?sub+renderAssetsArea():renderDashboard();
+  if(state.view==="stock") return canViewStock()?sub+renderStockArea():renderDashboard();
+  if(state.view==="procurement") return canViewProcurement()?sub+renderProcurementArea():renderDashboard();
   if(state.view==="projects") return canViewProjects()?renderProjectsArea():renderDashboard();
-  if(state.view==="users") return isAdmin()?renderUsers():renderDashboard();
   if(state.view==="maintenance") return isAdmin()?renderMaintenance():renderDashboard();
   return "";
 }
@@ -656,8 +675,7 @@ function renderUsers(){
         <div class="field" style="margin-bottom:0;display:flex;align-items:flex-end;"><button class="btn tiny" data-action="save-name" data-id="${u.id}">Enregistrer le nom</button></div>
       </div></div>`;
   }).join("")}</div>`;
-  return `<h1 class="page-title">Utilisateurs</h1>
-    <p class="page-sub">Renseignez le <strong>prénom et le nom</strong> de chaque compte (affichés partout à la place de l'email) et attribuez les rôles. La <strong>création</strong> de comptes se fait dans Supabase (Authentication → Add user).</p>
+  return `<p class="page-sub" style="margin-top:0;">Renseignez le <strong>prénom et le nom</strong> de chaque compte (affichés partout à la place de l'email) et attribuez les rôles. La <strong>création</strong> de comptes se fait dans Supabase (Authentication → Add user).</p>
     <div class="card" style="margin-bottom:18px;"><div class="section-label">Créer un compte</div>
       <div class="hint" style="font-size:13px;color:var(--ink-soft);">Dans le tableau de bord Supabase → <strong>Authentication → Users → Add user</strong> (cochez « Auto Confirm »). Le profil apparaît ici automatiquement ; attribuez-lui ensuite son rôle ci-dessous.</div>
     </div>
@@ -1368,14 +1386,20 @@ function renderMaintenance(){
     <button data-action="maint-subview" data-view="sites" class="${state.maintSubview==='sites'?'active':''}">Sites</button>
     <button data-action="maint-subview" data-view="services" class="${state.maintSubview==='services'?'active':''}">Services</button>
     <button data-action="maint-subview" data-view="vendors" class="${state.maintSubview==='vendors'?'active':''}">Fournisseurs</button>
+    <button data-action="maint-subview" data-view="users" class="${state.maintSubview==='users'?'active':''}">Utilisateurs</button>
   </div>`;
   let body;
   if(state.maintSubview==="dictionnaire") body=maintDictionnaire();
   else if(state.maintSubview==="sites") body=maintSites();
   else if(state.maintSubview==="services") body=maintServices();
   else if(state.maintSubview==="vendors") body=maintVendors();
+  else if(state.maintSubview==="users") body=maintUsers();
   else body=maintAnnonces();
-  return `<h1 class="page-title">Maintenance</h1><p class="page-sub">Annonces, listes configurables et sites.</p>${sub}${body}`;
+  return `<h1 class="page-title">Maintenance</h1><p class="page-sub">Annonces, listes configurables, sites, services, fournisseurs et utilisateurs.</p>${sub}${body}`;
+}
+function maintUsers(){
+  if(!state.usersLoaded){ loadUsers(); return `<div class="empty-state">Chargement des utilisateurs…</div>`; }
+  return renderUsers();
 }
 function loadLocations(){
   sb.from("locations").select("*").order("name").then(({data})=>{ state.locations=data||[]; state.locationsLoaded=true; render(); });
@@ -1572,7 +1596,7 @@ async function onAction(e){
   const busy=t=>{ el.disabled=true; if(el.tagName==="BUTTON"){ el.dataset._t=el.textContent; el.textContent=t; } };
   const unbusy=()=>{ el.disabled=false; if(el.dataset._t) el.textContent=el.dataset._t; };
 
-  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; state.staffNew=false; state.selectedAssetId=null; state.assetNew=false; state.selectedStockId=null; state.stockNew=false; state.selectedPrId=null; state.prNew=false; state.prDraftItems=[]; state.selectedPoId=null; if(el.dataset.view==="users"){state.usersLoaded=false;} if(el.dataset.view==="assets"){state.assetsLoaded=false;} if(el.dataset.view==="stock"){state.stockLoaded=false;} if(el.dataset.view==="procurement"){state.prLoaded=false;} if(el.dataset.view==="exec"){state.execLoaded=false;} if(el.dataset.view==="projects"){state.projectsLoaded=false; state.selectedProjectId=null; state.projectNew=false;} if(el.dataset.view==="maintenance"){state.locationsLoaded=false; state.departmentsLoaded=false; state.vendorsLoaded=false;} render(); return; }
+  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; state.staffNew=false; state.selectedAssetId=null; state.assetNew=false; state.selectedStockId=null; state.stockNew=false; state.selectedPrId=null; state.prNew=false; state.prDraftItems=[]; state.selectedPoId=null; if(el.dataset.view==="users"){state.usersLoaded=false;} if(el.dataset.view==="assets"){state.assetsLoaded=false;} if(el.dataset.view==="stock"){state.stockLoaded=false;} if(el.dataset.view==="procurement"){state.prLoaded=false;} if(el.dataset.view==="exec"){state.execLoaded=false;} if(el.dataset.view==="projects"){state.projectsLoaded=false; state.selectedProjectId=null; state.projectNew=false;} if(el.dataset.view==="maintenance"){state.locationsLoaded=false; state.departmentsLoaded=false; state.vendorsLoaded=false; state.usersLoaded=false;} render(); return; }
   if(action==="mon-nav"){ state.view=el.dataset.view; render(); return; }
   if(action==="refresh-now"){ busy("…"); try{ await reloadTickets(); state.lastSync=Date.now(); }catch(e){} render(); return; }
   if(action==="fullscreen"){ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(e){} return; }
