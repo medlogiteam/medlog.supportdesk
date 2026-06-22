@@ -898,7 +898,7 @@ function renderPoList(){
 async function loadPoFull(o){
   if(!o){ return; }
   const [items, receipts] = await Promise.all([
-    sb.from("purchase_request_items").select("*").eq("request_id", o.request_id).order("id"),
+    sb.from("purchase_request_items").select("*").eq("po_id", o.id).order("id"),
     sb.from("goods_receipts").select("*, items:goods_receipt_items(*)").eq("po_id", o.id).order("received_at",{ascending:false})
   ]);
   state.poItems = items.data||[];
@@ -1020,34 +1020,60 @@ function renderPrForm(){
     <div id="pr-error"></div>
     <button class="btn" data-action="submit-pr">Enregistrer la demande</button>`;
 }
+function poNoById(id){ const o=state.pos.find(x=>x.id===id); return o?o.po_no:""; }
 function renderPrDetail(r){
   const items=(state.prItems||[]);
   const total=items.reduce((s,it)=>s+(Number(it.qty)||0)*(Number(it.unit_cost)||0),0);
-  const itemRows=items.map(it=>`<tr><td>${esc(it.description)}</td><td style="text-align:right;font-family:var(--mono);">${esc(it.qty)}</td><td style="text-align:right;font-family:var(--mono);">${it.unit_cost!=null?esc(it.unit_cost):"—"}</td><td style="text-align:right;font-family:var(--mono);">${((Number(it.qty)||0)*(Number(it.unit_cost)||0)).toLocaleString("fr-FR")}</td></tr>`).join("");
+  const itemRows=items.map(it=>{
+    const lineTotal=(Number(it.qty)||0)*(Number(it.unit_cost)||0);
+    const assign = it.po_id ? `<span class="badge progress">${esc(poNoById(it.po_id)||"Commandée")}</span>` : `<span class="badge pending">Disponible</span>`;
+    return `<tr><td>${esc(it.description)}</td><td style="text-align:right;font-family:var(--mono);">${esc(it.qty)}</td><td style="text-align:right;font-family:var(--mono);">${it.unit_cost!=null?esc(it.unit_cost):"—"}</td><td style="text-align:right;font-family:var(--mono);">${lineTotal.toLocaleString("fr-FR")}</td><td style="text-align:center;">${assign}</td></tr>`;
+  }).join("");
   return `<div class="detail-header"><div><span class="ticket-id">${esc(r.request_no||"")}</span><h2>${esc(r.justification||"(sans objet)")}</h2>
       <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;"><span>Demandeur : ${esc(r.requester?r.requester.full_name:"")}</span>${r.department?`<span>${esc(r.department.name)}</span>`:""}${r.location?`<span>${esc(r.location.name)}</span>`:""}<span>Créée le ${fmtDate(r.created_at)}</span></div></div>
       <div style="display:flex;gap:8px;align-items:center;">${r.priority?`<span class="badge priority-${r.priority}">${esc(r.priority)}</span>`:""}${prStatusBadge(r.status)}</div></div>
     <div class="card"><div class="section-label">Articles demandés</div>
-      ${items.length?`<table style="width:100%;border-collapse:collapse;font-size:13.5px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid var(--border);">Désignation</th><th style="text-align:right;padding:8px;border-bottom:1px solid var(--border);">Qté</th><th style="text-align:right;padding:8px;border-bottom:1px solid var(--border);">PU</th><th style="text-align:right;padding:8px;border-bottom:1px solid var(--border);">Total</th></tr></thead><tbody>${itemRows}</tbody></table><div style="text-align:right;margin-top:10px;font-size:14px;"><strong>Total estimé : ${total.toLocaleString("fr-FR")}</strong></div>`:`<div class="empty-state">Aucun article.</div>`}
+      ${items.length?`<table style="width:100%;border-collapse:collapse;font-size:13.5px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid var(--border);">Désignation</th><th style="text-align:right;padding:8px;border-bottom:1px solid var(--border);">Qté</th><th style="text-align:right;padding:8px;border-bottom:1px solid var(--border);">PU</th><th style="text-align:right;padding:8px;border-bottom:1px solid var(--border);">Total</th><th style="text-align:center;padding:8px;border-bottom:1px solid var(--border);">Affectation</th></tr></thead><tbody>${itemRows}</tbody></table><div style="text-align:right;margin-top:10px;font-size:14px;"><strong>Total estimé : ${total.toLocaleString("fr-FR")}</strong></div>`:`<div class="empty-state">Aucun article.</div>`}
     </div>
-    ${convertCard(r,total)}`;
+    ${convertCard(r)}`;
 }
-function convertCard(r,total){
-  if(r.status==="ordered") return `<div class="card" style="margin-top:16px;"><div class="section-label">Commande</div><div style="font-size:13.5px;">Cette demande a déjà été convertie en commande. Consultez l'onglet <strong>Commandes</strong>.</div></div>`;
+function convertCard(r){
   if(r.status==="cancelled") return "";
   if(!canCreatePr()) return "";
-  const vendorOpts=`<option value="">— choisir un fournisseur —</option>`+state.vendors.filter(v=>v.is_active!==false).map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join("");
+  const items=(state.prItems||[]);
+  const free=items.filter(it=>!it.po_id);
+  if(items.length && free.length===0) return `<div class="card" style="margin-top:16px;"><div class="section-label">Commandes</div><div style="font-size:13.5px;">Toutes les lignes de cette demande ont été commandées. Consultez l'onglet <strong>Commandes</strong>.</div></div>`;
+  if(!free.length) return "";
   const noVendor=state.vendors.filter(v=>v.is_active!==false).length===0;
-  return `<div class="card" style="margin-top:16px;"><div class="section-label">Convertir en commande</div>
-    ${noVendor?`<div class="hint" style="color:var(--critical);">Aucun fournisseur enregistré. Ajoutez-en dans Maintenance → Fournisseurs avant de commander.</div>`:`
+  if(noVendor) return `<div class="card" style="margin-top:16px;"><div class="section-label">Créer une commande</div><div class="hint" style="color:var(--critical);">Aucun fournisseur enregistré. Ajoutez-en dans Maintenance → Fournisseurs avant de commander.</div></div>`;
+  const vendorOpts=`<option value="">— choisir un fournisseur —</option>`+state.vendors.filter(v=>v.is_active!==false).map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join("");
+  const lineRows=free.map(it=>{
+    const lt=(Number(it.qty)||0)*(Number(it.unit_cost)||0);
+    return `<label class="cv-row" style="display:flex;align-items:center;gap:10px;padding:7px 4px;border-bottom:1px solid var(--border);cursor:pointer;">
+      <input type="checkbox" class="cv-line" value="${it.id}" data-cost="${lt}" checked onchange="onCvToggle()">
+      <span style="flex:1;">${esc(it.description)}</span>
+      <span style="font-family:var(--mono);color:var(--ink-soft);">qté ${esc(it.qty)}</span>
+      <span style="font-family:var(--mono);width:90px;text-align:right;">${lt.toLocaleString("fr-FR")}</span>
+    </label>`;
+  }).join("");
+  const initialTotal=free.reduce((s,it)=>s+(Number(it.qty)||0)*(Number(it.unit_cost)||0),0);
+  return `<div class="card" style="margin-top:16px;border-color:var(--brand-2);"><div class="section-label">Créer une commande</div>
+    <div class="hint">Cochez les lignes à inclure dans cette commande. Les lignes non cochées restent disponibles pour une autre commande / un autre fournisseur.</div>
+    <div style="margin:8px 0;">${lineRows}</div>
     <div class="field-row">
-      <div class="field"><label for="po-vendor">Fournisseur</label><select id="po-vendor">${vendorOpts}</select></div>
-      <div class="field"><label for="po-date">Livraison prévue</label><input type="date" id="po-date"></div>
+      <div class="field"><label for="cv-vendor">Fournisseur</label><select id="cv-vendor">${vendorOpts}</select></div>
+      <div class="field"><label for="cv-deliv">Livraison prévue</label><input type="date" id="cv-deliv"></div>
     </div>
-    <div class="field" style="max-width:260px;"><label for="po-amount">Montant</label><input type="text" id="po-amount" value="${total||""}" placeholder="0"></div>
-    <div id="po-error"></div>
-    <button class="btn" data-action="convert-pr" data-id="${r.id}">Créer la commande</button>`}
+    <div class="field" style="max-width:260px;"><label for="cv-amount">Montant (auto, modifiable)</label><input type="text" id="cv-amount" value="${initialTotal||""}"></div>
+    <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:8px;">Total des lignes cochées : <strong id="cv-total">${initialTotal.toLocaleString("fr-FR")}</strong></div>
+    <div id="cv-error"></div>
+    <button class="btn" data-action="convert-pr" data-id="${r.id}">Créer la commande</button>
   </div>`;
+}
+function onCvToggle(){
+  let t=0; document.querySelectorAll(".cv-line").forEach(c=>{ if(c.checked) t+=Number(c.dataset.cost)||0; });
+  const tot=document.getElementById("cv-total"); if(tot) tot.textContent=t.toLocaleString("fr-FR");
+  const amt=document.getElementById("cv-amount"); if(amt) amt.value=t||"";
 }
 
 // =========================== MAINTENANCE (admin) ===========================
@@ -1470,17 +1496,24 @@ async function onAction(e){
   }
   if(action==="convert-pr"){
     const id=el.dataset.id;
-    const vendor_id=document.getElementById("po-vendor").value;
-    const delivery_date=document.getElementById("po-date").value||null;
-    const amountRaw=document.getElementById("po-amount").value.trim();
+    const vendor_id=document.getElementById("cv-vendor").value;
+    const delivery_date=document.getElementById("cv-deliv").value||null;
+    const amountRaw=(document.getElementById("cv-amount").value||"").trim();
     const amount=amountRaw?Number(amountRaw):null;
-    const errBox=document.getElementById("po-error");
+    const errBox=document.getElementById("cv-error");
+    const lineIds=Array.from(document.querySelectorAll(".cv-line")).filter(c=>c.checked).map(c=>c.value);
     if(!vendor_id){ errBox.innerHTML=`<div class="error-msg">Choisissez un fournisseur.</div>`; return; }
+    if(!lineIds.length){ errBox.innerHTML=`<div class="error-msg">Cochez au moins une ligne à commander.</div>`; return; }
     busy("Création de la commande…");
     const { data:po, error } = await sb.from("purchase_orders").insert({ request_id:id, vendor_id, amount, delivery_date, status:"open" }).select().single();
     if(error){ errBox.innerHTML=`<div class="error-msg">${esc(error.message)}</div>`; unbusy(); return; }
-    const { error:e2 } = await sb.from("purchase_requests").update({ status:"ordered" }).eq("id",id);
-    if(e2){ errBox.innerHTML=`<div class="error-msg">Commande créée mais statut non mis à jour : ${esc(e2.message)}</div>`; }
+    const { error:eL } = await sb.from("purchase_request_items").update({ po_id:po.id }).in("id", lineIds);
+    if(eL){ errBox.innerHTML=`<div class="error-msg">Commande créée mais lignes non rattachées : ${esc(eL.message)}</div>`; }
+    // statut de la demande selon les lignes restantes
+    const { data:allLines } = await sb.from("purchase_request_items").select("id, po_id").eq("request_id", id);
+    const assigned=(allLines||[]).filter(l=>l.po_id).length, totalL=(allLines||[]).length;
+    const reqStatus = assigned===0 ? "open" : (assigned<totalL ? "partial" : "ordered");
+    await sb.from("purchase_requests").update({ status:reqStatus }).eq("id",id);
     await reloadPr(); await reloadPos();
     state.selectedPrId=null; state.selectedPoId=po.id; state.procSubview="orders"; state.poReceiving=false;
     const full=state.pos.find(x=>x.id===po.id)||po;
