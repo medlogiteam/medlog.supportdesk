@@ -202,7 +202,8 @@ let state = {
   prs:[], prLoaded:false, prItems:[], selectedPrId:null, prNew:false, prDraftItems:[], departments:[], departmentsLoaded:false,
   pos:[], vendors:[], vendorsLoaded:false, procSubview:"requests", selectedPoId:null, poItems:[],
   poReceipts:[], receivedByItem:{}, poReceiving:false,
-  projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[]
+  projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[],
+  execLoaded:false, execData:null
 };
 
 // --- Utilitaires ---
@@ -225,6 +226,7 @@ function canViewProcurement(){ return ["admin","it_manager","buyer"].includes(ro
 function canCreatePr(){ return ["admin","it_manager","buyer"].includes(roleName()); }
 function canViewProjects(){ return ["admin","it_manager","project_manager"].includes(roleName()); }
 function canManageProjects(){ return ["admin","project_manager"].includes(roleName()); }
+function canViewExec(){ return ["admin","it_manager"].includes(roleName()); }
 function canCreate(){ return roleName() && roleName()!=="viewer"; }
 function uid(){ return state.session ? state.session.user.id : null; }
 function displayName(p){ if(!p) return ""; const fl=[p.first_name,p.last_name].filter(Boolean).join(" ").trim(); return fl || p.full_name || p.email || ""; }
@@ -350,6 +352,7 @@ function renderHeader(){
   } else if(state.profile){
     const r=roleName();
     const tabs=[["dashboard","Tableau de bord"]];
+    if(canViewExec()) tabs.push(["exec","Direction"]);
     tabs.push(["tickets", r==="user"?"Mes tickets":"Tickets"]);
     if(canViewAssets()) tabs.push(["assets","Actifs"]);
     if(canViewStock()) tabs.push(["stock","Stock"]);
@@ -367,6 +370,7 @@ function renderMain(){
   if(state.loadError) return `<div class="gate"><h1>Erreur de chargement</h1><div class="card"><div class="error-msg">${esc(state.loadError)}</div><button class="btn" data-action="retry" style="margin-top:12px;">Réessayer</button></div></div>`;
   if(isMonitor()) return state.view==="report" ? renderReport() : state.view==="announces" ? renderMonitorAnnonces() : renderMonitor();
   if(state.view==="dashboard") return renderDashboard();
+  if(state.view==="exec") return canViewExec()?renderExec():renderDashboard();
   if(state.view==="tickets") return renderTicketsArea();
   if(state.view==="assets") return canViewAssets()?renderAssetsArea():renderDashboard();
   if(state.view==="stock") return canViewStock()?renderStockArea():renderDashboard();
@@ -432,6 +436,79 @@ function renderDashboard(){
 function avgResolution(data){ const ds=data.filter(t=>t.status==="Closed"&&t.closed_at).map(t=>(new Date(t.closed_at)-new Date(t.created_at))/86400000); return ds.length?ds.reduce((a,b)=>a+b,0)/ds.length:null; }
 function groupCount(data,fn){ const m={}; data.forEach(t=>{const k=fn(t)||"—"; m[k]=(m[k]||0)+1;}); return Object.keys(m).map(k=>({label:k,count:m[k]})).sort((a,b)=>b.count-a.count); }
 function barList(items){ if(!items.length) return `<div class="empty-state">Aucune donnée.</div>`; const max=Math.max(1,...items.map(i=>i.count)); return `<div class="bars">${items.map(i=>`<div class="bar-row"><div class="b-label" title="${esc(i.label)}">${esc(i.label)}</div><div class="b-track"><div class="b-fill" style="width:${Math.round(i.count/max*100)}%"></div></div><div class="b-count">${i.count}</div></div>`).join("")}</div>`; }
+
+// =========================== DIRECTION (Phase 5 — tableau de bord exécutif) ===========================
+async function loadExec(){
+  try{
+    const soon=new Date(); soon.setDate(soon.getDate()+30); const soonISO=soon.toISOString().slice(0,10); const todayISO=new Date().toISOString().slice(0,10);
+    const [assets, stock, prs, pos, projects] = await Promise.all([
+      sb.from("assets").select("id,status,warranty_expiry,assigned_user_id"),
+      sb.from("stock_items").select("id,quantity,min_threshold").eq("is_active",true),
+      sb.from("purchase_requests").select("id,status,estimated_cost"),
+      sb.from("purchase_orders").select("id,status,amount"),
+      sb.from("projects").select("id,status,progress_pct,end_date")
+    ]);
+    state.execData={
+      assets:assets.data||[], stock:stock.data||[], prs:prs.data||[], pos:pos.data||[], projects:projects.data||[],
+      soonISO, todayISO
+    };
+    state.execLoaded=true; render();
+  }catch(e){ state.execData=null; state.execLoaded=true; render(); }
+}
+function renderExec(){
+  if(!state.execLoaded){ loadExec(); return `<div class="empty-state">Consolidation des données…</div>`; }
+  const d=state.execData||{assets:[],stock:[],prs:[],pos:[],projects:[]};
+  const tk=state.tickets||[];
+  const tkOpen=tk.filter(t=>t.status!=="Closed").length, tkOver=tk.filter(isOverdue).length;
+  const aAssigned=d.assets.filter(a=>a.status==="Assigned").length, aStock=d.assets.filter(a=>a.status==="In Stock").length;
+  const aWarranty=d.assets.filter(a=>a.warranty_expiry && a.warranty_expiry<=d.soonISO && a.warranty_expiry>=d.todayISO).length;
+  const aExpired=d.assets.filter(a=>a.warranty_expiry && a.warranty_expiry<d.todayISO).length;
+  const low=d.stock.filter(s=>Number(s.quantity)<Number(s.min_threshold||0)).length;
+  const stockUnits=d.stock.reduce((a,s)=>a+(Number(s.quantity)||0),0);
+  const prOpen=d.prs.filter(p=>p.status==="open"||p.status==="partial").length;
+  const poOpen=d.pos.filter(p=>p.status!=="received"&&p.status!=="cancelled").length;
+  const poAmount=d.pos.filter(p=>p.status!=="cancelled").reduce((a,p)=>a+(Number(p.amount)||0),0);
+  const pjActive=d.projects.filter(p=>p.status==="In Progress").length;
+  const pjLate=d.projects.filter(p=>p.end_date && p.status!=="Completed" && p.status!=="Cancelled" && p.end_date<d.todayISO).length;
+  const pjAvg=d.projects.length? Math.round(d.projects.reduce((a,p)=>a+(Number(p.progress_pct)||0),0)/d.projects.length):0;
+
+  const section=(title,tiles)=>`<div class="card" style="margin-bottom:16px;"><div class="section-label">${title}</div><div class="stat-row">${tiles}</div></div>`;
+  const tile=(n,l,cls="")=>`<div class="stat ${cls}"><div class="n">${n}</div><div class="l">${l}</div></div>`;
+
+  const ticketsSec=section("Support Desk", [
+    tile(tk.length,"Tickets (total)"), tile(tkOpen,"Ouverts","accent"),
+    tile(tkOver,"En retard", tkOver?"alert":""), tile(tk.filter(t=>t.service==="MEDLOGIX"&&t.status!=="Closed").length,"MEDLOGIX ouverts")
+  ].join(""));
+  const assetsSec=section("Parc informatique", [
+    tile(d.assets.length,"Actifs"), tile(aAssigned,"Affectés","accent"), tile(aStock,"En stock"),
+    tile(aWarranty,"Garantie < 30 j", aWarranty?"alert":""), tile(aExpired,"Garantie expirée", aExpired?"alert":"")
+  ].join(""));
+  const stockSec=section("Stock", [
+    tile(d.stock.length,"Références"), tile(stockUnits.toLocaleString("fr-FR"),"Unités en stock"),
+    tile(low,"Sous le seuil", low?"alert":"")
+  ].join(""));
+  const procSec=section("Achats", [
+    tile(d.prs.length,"Demandes"), tile(prOpen,"À traiter","accent"),
+    tile(poOpen,"Commandes en cours"), tile(poAmount.toLocaleString("fr-FR"),"Montant commandé")
+  ].join(""));
+  const projSec=section("Projets", [
+    tile(d.projects.length,"Projets"), tile(pjActive,"En cours","accent"),
+    tile(pjLate,"En retard", pjLate?"alert":""), tile(pjAvg+"%","Avancement moyen")
+  ].join(""));
+
+  const charts=`<div class="two-col">
+    <div class="card"><div class="section-label">Tickets par statut</div>${barList(groupCount(tk,t=>t.status))}</div>
+    <div class="card"><div class="section-label">Actifs par statut</div>${barList(groupCount(d.assets,a=>assetStatusLabel(a.status)))}</div>
+  </div><div class="two-col">
+    <div class="card"><div class="section-label">Commandes par statut</div>${barList(groupCount(d.pos,p=>({open:"Ouverte",partial:"Partielle",received:"Reçue",cancelled:"Annulée"}[p.status]||p.status)))}</div>
+    <div class="card"><div class="section-label">Projets par statut</div>${barList(groupCount(d.projects,p=>projectStatusLabel(p.status)))}</div>
+  </div>`;
+
+  return `<h1 class="page-title">Tableau de bord — Direction</h1><p class="page-sub">Vue consolidée de l'exploitation IT, tous modules. <button class="link" data-action="exec-refresh">actualiser</button></p>
+    ${ticketsSec}${assetsSec}${stockSec}${procSec}${projSec}
+    <h2 class="page-sub" style="margin-top:8px;font-weight:600;">Répartitions</h2>
+    ${charts}`;
+}
 
 // =========================== TICKETS ===========================
 function reqName(t){ return t.requester ? (t.requester.full_name||t.requester.email) : "—"; }
@@ -1495,7 +1572,7 @@ async function onAction(e){
   const busy=t=>{ el.disabled=true; if(el.tagName==="BUTTON"){ el.dataset._t=el.textContent; el.textContent=t; } };
   const unbusy=()=>{ el.disabled=false; if(el.dataset._t) el.textContent=el.dataset._t; };
 
-  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; state.staffNew=false; state.selectedAssetId=null; state.assetNew=false; state.selectedStockId=null; state.stockNew=false; state.selectedPrId=null; state.prNew=false; state.prDraftItems=[]; state.selectedPoId=null; if(el.dataset.view==="users"){state.usersLoaded=false;} if(el.dataset.view==="assets"){state.assetsLoaded=false;} if(el.dataset.view==="stock"){state.stockLoaded=false;} if(el.dataset.view==="procurement"){state.prLoaded=false;} if(el.dataset.view==="projects"){state.projectsLoaded=false; state.selectedProjectId=null; state.projectNew=false;} if(el.dataset.view==="maintenance"){state.locationsLoaded=false; state.departmentsLoaded=false; state.vendorsLoaded=false;} render(); return; }
+  if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; state.staffNew=false; state.selectedAssetId=null; state.assetNew=false; state.selectedStockId=null; state.stockNew=false; state.selectedPrId=null; state.prNew=false; state.prDraftItems=[]; state.selectedPoId=null; if(el.dataset.view==="users"){state.usersLoaded=false;} if(el.dataset.view==="assets"){state.assetsLoaded=false;} if(el.dataset.view==="stock"){state.stockLoaded=false;} if(el.dataset.view==="procurement"){state.prLoaded=false;} if(el.dataset.view==="exec"){state.execLoaded=false;} if(el.dataset.view==="projects"){state.projectsLoaded=false; state.selectedProjectId=null; state.projectNew=false;} if(el.dataset.view==="maintenance"){state.locationsLoaded=false; state.departmentsLoaded=false; state.vendorsLoaded=false;} render(); return; }
   if(action==="mon-nav"){ state.view=el.dataset.view; render(); return; }
   if(action==="refresh-now"){ busy("…"); try{ await reloadTickets(); state.lastSync=Date.now(); }catch(e){} render(); return; }
   if(action==="fullscreen"){ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(e){} return; }
@@ -1799,6 +1876,7 @@ async function onAction(e){
     return;
   }
 
+  if(action==="exec-refresh"){ state.execLoaded=false; render(); return; }
   // ---- Projets (Phase 4) ----
   if(action==="project-new"){ state.projectNew=true; state.selectedProjectId=null; render(); return; }
   if(action==="project-cancel"){ state.projectNew=false; render(); return; }
