@@ -200,7 +200,8 @@ let state = {
   stockItems:[], stockLoaded:false, stockSubview:"inventory", stockSearch:"", stockMoves:[], locations:[], locationsLoaded:false,
   selectedStockId:null, stockNew:false,
   prs:[], prLoaded:false, prItems:[], selectedPrId:null, prNew:false, prDraftItems:[], departments:[], departmentsLoaded:false,
-  pos:[], vendors:[], vendorsLoaded:false, procSubview:"requests", selectedPoId:null, poItems:[]
+  pos:[], vendors:[], vendorsLoaded:false, procSubview:"requests", selectedPoId:null, poItems:[],
+  poReceipts:[], receivedByItem:{}, poReceiving:false
 };
 
 // --- Utilitaires ---
@@ -845,8 +846,8 @@ function onStockTypeChange(){ const t=document.getElementById("sm-type").value; 
 
 // =========================== ACHATS (Phase 3 — demandes) ===========================
 function prStatusBadge(s){
-  const map={"open":"pending","ordered":"progress","received":"closed","cancelled":"reopened"};
-  const lbl={"open":"Ouverte","ordered":"Commandée","received":"Reçue","cancelled":"Annulée"};
+  const map={"open":"pending","ordered":"progress","partial":"testing","received":"closed","cancelled":"reopened"};
+  const lbl={"open":"Ouverte","ordered":"Commandée","partial":"Partielle","received":"Reçue","cancelled":"Annulée"};
   return `<span class="badge ${map[s]||'pending'}">${esc(lbl[s]||s)}</span>`;
 }
 async function loadProcurement(){
@@ -894,22 +895,89 @@ function renderPoList(){
     <div class="col-status">${prStatusBadge(o.status)}</div></div>`).join("");
   return state.pos.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucune commande. Convertissez une demande depuis l'onglet Demandes.</div>`;
 }
-async function loadPoItems(requestId){
-  const { data } = await sb.from("purchase_request_items").select("*").eq("request_id",requestId).order("id");
-  state.poItems=data||[];
+async function loadPoFull(o){
+  if(!o){ return; }
+  const [items, receipts] = await Promise.all([
+    sb.from("purchase_request_items").select("*").eq("request_id", o.request_id).order("id"),
+    sb.from("goods_receipts").select("*, items:goods_receipt_items(*)").eq("po_id", o.id).order("received_at",{ascending:false})
+  ]);
+  state.poItems = items.data||[];
+  state.poReceipts = receipts.data||[];
+  const recv={};
+  (state.poReceipts||[]).forEach(r=> (r.items||[]).forEach(gi=>{ if(gi.request_item_id){ recv[gi.request_item_id]=(recv[gi.request_item_id]||0)+(Number(gi.qty)||0); } }));
+  state.receivedByItem = recv;
   render();
 }
+function receivedQty(lineId){ return state.receivedByItem[lineId]||0; }
+function remainingQty(line){ return Math.max(0, (Number(line.qty)||0) - receivedQty(line.id)); }
+function poFullyReceived(){ return (state.poItems||[]).every(l=> remainingQty(l)<=0); }
 function renderPoDetail(o){
   const items=(state.poItems||[]);
   const total=items.reduce((s,it)=>s+(Number(it.qty)||0)*(Number(it.unit_cost)||0),0);
-  const itemRows=items.map(it=>`<tr><td>${esc(it.description)}</td><td style="text-align:right;font-family:var(--mono);">${esc(it.qty)}</td><td style="text-align:right;font-family:var(--mono);">${it.unit_cost!=null?esc(it.unit_cost):"—"}</td><td style="text-align:right;font-family:var(--mono);">${((Number(it.qty)||0)*(Number(it.unit_cost)||0)).toLocaleString("fr-FR")}</td></tr>`).join("");
+  const fully=poFullyReceived();
+  const itemRows=items.map(it=>{
+    const rec=receivedQty(it.id), rem=remainingQty(it);
+    const recColor = rem<=0 ? "#1e7e34" : (rec>0 ? "#b8860b" : "var(--ink-soft)");
+    return `<tr><td>${esc(it.description)}</td><td style="text-align:right;font-family:var(--mono);">${esc(it.qty)}</td><td style="text-align:right;font-family:var(--mono);color:${recColor};">${rec}</td><td style="text-align:right;font-family:var(--mono);">${rem}</td></tr>`;
+  }).join("");
+  const recBtn = (!fully && canCreatePr() && !state.poReceiving) ? `<button class="btn" data-action="po-receive" data-id="${o.id}">Réceptionner</button>` : "";
+  const histRows=(state.poReceipts||[]).map(r=>{
+    const lines=(r.items||[]).map(gi=>{
+      const dest = gi.destination==="asset"?"→ Parc":(gi.destination==="stock"?"→ Stock":"ignoré");
+      return `<div style="font-size:12.5px;color:var(--ink-soft);">• ${esc(gi.description||"")} × ${esc(gi.qty)} <span style="color:var(--ink-faint);">${dest}</span></div>`;
+    }).join("");
+    return `<div class="thread-item"><div class="t-head"><span class="who">Réception</span><span>${fmtDate(r.received_at)}</span></div><div class="t-body">${userName(r.received_by)}${r.note?` — ${esc(r.note)}`:""}${lines}</div></div>`;
+  }).join("");
   return `<div class="detail-header"><div><span class="ticket-id">${esc(o.po_no||"")}</span><h2>${esc(o.vendor?o.vendor.name:"(fournisseur ?)")}</h2>
       <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;"><span>Demande : ${esc(o.request?o.request.request_no:"")}</span>${o.delivery_date?`<span>Livraison prévue : ${esc(o.delivery_date)}</span>`:""}<span>Créée le ${fmtDate(o.created_at)}</span></div></div>
       <div style="display:flex;gap:8px;align-items:center;">${prStatusBadge(o.status)}</div></div>
-    <div class="card"><div class="section-label">Articles commandés</div>
-      ${items.length?`<table style="width:100%;border-collapse:collapse;font-size:13.5px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid var(--border);">Désignation</th><th style="text-align:right;padding:8px;border-bottom:1px solid var(--border);">Qté</th><th style="text-align:right;padding:8px;border-bottom:1px solid var(--border);">PU</th><th style="text-align:right;padding:8px;border-bottom:1px solid var(--border);">Total</th></tr></thead><tbody>${itemRows}</tbody></table><div style="text-align:right;margin-top:10px;font-size:14px;"><strong>Montant : ${(o.amount!=null?Number(o.amount):total).toLocaleString("fr-FR")}</strong></div>`:`<div class="empty-state">Chargement des articles…</div>`}
+    <div class="card"><div class="section-label">Articles — commandés / reçus / restants</div>
+      ${items.length?`<table style="width:100%;border-collapse:collapse;font-size:13.5px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid var(--border);">Désignation</th><th style="text-align:right;padding:8px;border-bottom:1px solid var(--border);">Cmd</th><th style="text-align:right;padding:8px;border-bottom:1px solid var(--border);">Reçu</th><th style="text-align:right;padding:8px;border-bottom:1px solid var(--border);">Restant</th></tr></thead><tbody>${itemRows}</tbody></table><div style="text-align:right;margin-top:10px;font-size:14px;"><strong>Montant : ${(o.amount!=null?Number(o.amount):total).toLocaleString("fr-FR")}</strong></div>`:`<div class="empty-state">Chargement des articles…</div>`}
+      ${fully?`<div class="hint" style="color:#1e7e34;margin-top:10px;">Commande entièrement réceptionnée.</div>`:`<div style="margin-top:14px;">${recBtn}</div>`}
     </div>
-    <div class="hint" style="margin-top:14px;">La réception (entrée automatique en stock) arrivera dans la tranche 3 de la Phase 3.</div>`;
+    ${state.poReceiving?renderReceiveForm(o):""}
+    ${(state.poReceipts&&state.poReceipts.length)?`<div class="card" style="margin-top:16px;"><div class="section-label">Historique des réceptions</div><div class="thread">${histRows}</div></div>`:""}`;
+}
+function renderReceiveForm(o){
+  const stockOpts=`<option value="__new">➕ Nouvel article de stock (depuis la désignation)</option>`+state.stockItems.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join("");
+  const catOpts=`<option value="">— catégorie —</option>`+state.assetCats.slice().sort((a,b)=>(a.parent_id?1:0)-(b.parent_id?1:0)||a.name.localeCompare(b.name)).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("");
+  const locOpts=`<option value="">— site —</option>`+state.locations.map(l=>`<option value="${l.id}" ${o.request&&o.request.location_id===l.id?'selected':''}>${esc(l.name)}</option>`).join("");
+  const lines=(state.poItems||[]).filter(l=>remainingQty(l)>0).map(l=>{
+    const rem=remainingQty(l);
+    return `<div class="card" style="margin-bottom:12px;background:var(--surface-2,#fafbfc);">
+      <div style="font-weight:600;margin-bottom:8px;">${esc(l.description)} <span class="ticket-id">restant : ${rem}</span></div>
+      <div class="field-row">
+        <div class="field" style="max-width:140px;"><label>Quantité reçue</label><input type="text" id="rcv-qty-${l.id}" value="${rem}"></div>
+        <div class="field"><label>Destination</label><select id="rcv-dest-${l.id}" onchange="onRcvDest('${l.id}')"><option value="stock">Vers le stock</option><option value="asset">Vers le parc (actifs)</option><option value="ignore">Ignorer</option></select></div>
+      </div>
+      <div id="rcv-stock-${l.id}">
+        <div class="field-row">
+          <div class="field"><label>Article de stock</label><select id="rcv-item-${l.id}">${stockOpts}</select></div>
+          <div class="field"><label>Site</label><select id="rcv-sloc-${l.id}">${locOpts}</select></div>
+        </div>
+      </div>
+      <div id="rcv-asset-${l.id}" style="display:none;">
+        <div class="field-row">
+          <div class="field"><label>Catégorie d'actif</label><select id="rcv-cat-${l.id}">${catOpts}</select></div>
+          <div class="field"><label>Site</label><select id="rcv-aloc-${l.id}">${locOpts}</select></div>
+        </div>
+        <div class="hint">Un actif sera créé par unité reçue (un code d'inventaire provisoire est généré automatiquement).</div>
+      </div>
+    </div>`;
+  }).join("");
+  return `<div class="card" style="margin-top:16px;border-color:var(--brand-2);">
+    <div class="section-label">Réceptionner la commande</div>
+    ${lines||`<div class="empty-state">Toutes les lignes sont déjà reçues.</div>`}
+    <div class="field"><label for="rcv-note">Note (bon de livraison, remarque…)</label><input type="text" id="rcv-note"></div>
+    <div id="rcv-error"></div>
+    <div class="btn-row"><button class="btn" data-action="submit-receipt" data-id="${o.id}">Valider la réception</button><button class="btn secondary" data-action="receive-cancel">Annuler</button></div>
+  </div>`;
+}
+function onRcvDest(id){
+  const v=document.getElementById("rcv-dest-"+id).value;
+  const st=document.getElementById("rcv-stock-"+id), as=document.getElementById("rcv-asset-"+id);
+  if(st) st.style.display = v==="stock"?"block":"none";
+  if(as) as.style.display = v==="asset"?"block":"none";
 }
 function renderPrList(){
   const newBtn=canCreatePr()?`<button class="btn secondary" data-action="pr-new">+ Nouvelle demande</button>`:"";
@@ -1328,8 +1396,78 @@ async function onAction(e){
   if(action==="open-pr"){ state.selectedPrId=el.dataset.id; state.prItems=[]; render(); await loadPrItems(el.dataset.id); return; }
   if(action==="pr-back"){ state.selectedPrId=null; render(); return; }
   if(action==="proc-subview"){ state.procSubview=el.dataset.view; render(); return; }
-  if(action==="open-po"){ state.selectedPoId=el.dataset.id; state.poItems=[]; const o=state.pos.find(x=>x.id===el.dataset.id); render(); if(o&&o.request_id) await loadPoItems(o.request_id); return; }
-  if(action==="po-back"){ state.selectedPoId=null; render(); return; }
+  if(action==="open-po"){ state.selectedPoId=el.dataset.id; state.poItems=[]; state.poReceipts=[]; state.receivedByItem={}; state.poReceiving=false; const o=state.pos.find(x=>x.id===el.dataset.id); render(); await loadPoFull(o); return; }
+  if(action==="po-back"){ state.selectedPoId=null; state.poReceiving=false; render(); return; }
+  if(action==="receive-cancel"){ state.poReceiving=false; render(); return; }
+  if(action==="po-receive"){
+    busy("…");
+    try{
+      const [si, cats] = await Promise.all([
+        sb.from("stock_items").select("id,name,unit,location_id").eq("is_active",true).order("name"),
+        sb.from("asset_categories").select("*").order("name")
+      ]);
+      state.stockItems=si.data||[]; state.assetCats=cats.data||[];
+      if(!state.locations.length){ const {data}=await sb.from("locations").select("*").eq("is_active",true).order("name"); state.locations=data||[]; }
+    }catch(e){}
+    state.poReceiving=true; render(); return;
+  }
+  if(action==="submit-receipt"){
+    const o=state.pos.find(x=>x.id===el.dataset.id);
+    const errBox=document.getElementById("rcv-error");
+    const note=(document.getElementById("rcv-note")||{}).value||"";
+    const draftLines=[];
+    for(const l of (state.poItems||[])){
+      const rem=remainingQty(l); if(rem<=0) continue;
+      const qEl=document.getElementById("rcv-qty-"+l.id); if(!qEl) continue;
+      const qty=parseInt(qEl.value||"0",10)||0;
+      if(qty<=0) continue;
+      if(qty>rem){ errBox.innerHTML=`<div class="error-msg">« ${esc(l.description)} » : quantité (${qty}) supérieure au restant (${rem}).</div>`; return; }
+      const dest=document.getElementById("rcv-dest-"+l.id).value;
+      const entry={ line:l, qty, dest };
+      if(dest==="stock"){ entry.item=document.getElementById("rcv-item-"+l.id).value; entry.loc=document.getElementById("rcv-sloc-"+l.id).value||null; }
+      if(dest==="asset"){ entry.cat=document.getElementById("rcv-cat-"+l.id).value||null; entry.loc=document.getElementById("rcv-aloc-"+l.id).value||null;
+        if(!entry.cat){ errBox.innerHTML=`<div class="error-msg">« ${esc(l.description)} » : choisissez une catégorie d'actif.</div>`; return; } }
+      draftLines.push(entry);
+    }
+    if(!draftLines.length){ errBox.innerHTML=`<div class="error-msg">Renseignez au moins une quantité à recevoir.</div>`; return; }
+    busy("Réception en cours…");
+    try{
+      const { data:rec, error:eR } = await sb.from("goods_receipts").insert({ po_id:o.id, received_by:uid(), note }).select().single();
+      if(eR) throw eR;
+      let lineIdx=0;
+      for(const e of draftLines){
+        lineIdx++;
+        let item_id=null, asset_created_id=null;
+        if(e.dest==="stock"){
+          if(e.item==="__new"){
+            const { data:ni, error:eN } = await sb.from("stock_items").insert({ name:e.line.description, location_id:e.loc, quantity:0, min_threshold:0, unit:"" }).select().single();
+            if(eN) throw eN; item_id=ni.id;
+          } else { item_id=e.item; }
+          const { data:cur } = await sb.from("stock_items").select("quantity").eq("id",item_id).single();
+          const newQty=(Number(cur?cur.quantity:0)||0)+e.qty;
+          await sb.from("stock_items").update({ quantity:newQty }).eq("id",item_id);
+          await sb.from("stock_movements").insert({ item_id, type:"receipt", qty:e.qty, to_location_id:e.loc, actor_id:uid(), reference:o.po_no });
+        } else if(e.dest==="asset"){
+          for(let k=1;k<=e.qty;k++){
+            const tag=`${o.po_no}-${lineIdx}-${k}`;
+            const { data:na } = await sb.from("assets").insert({ asset_tag:tag, name:e.line.description, category_id:e.cat, location_id:e.loc, status:"In Stock", owner_type:"Company Asset" }).select().single();
+            if(na && !asset_created_id) asset_created_id=na.id;
+          }
+        }
+        await sb.from("goods_receipt_items").insert({ receipt_id:rec.id, request_item_id:e.line.id, description:e.line.description, qty:e.qty, destination:e.dest, location_id:e.loc||null, item_id, asset_created_id });
+      }
+      // recompute status
+      const recv={...state.receivedByItem};
+      draftLines.forEach(e=>{ recv[e.line.id]=(recv[e.line.id]||0)+e.qty; });
+      const allDone=(state.poItems||[]).every(l=> (recv[l.id]||0) >= (Number(l.qty)||0));
+      await sb.from("purchase_orders").update({ status: allDone?"received":"partial" }).eq("id",o.id);
+      await reloadPos();
+      const full=state.pos.find(x=>x.id===o.id)||o;
+      state.poReceiving=false;
+      await loadPoFull(full);
+    }catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); }
+    return;
+  }
   if(action==="convert-pr"){
     const id=el.dataset.id;
     const vendor_id=document.getElementById("po-vendor").value;
@@ -1344,8 +1482,9 @@ async function onAction(e){
     const { error:e2 } = await sb.from("purchase_requests").update({ status:"ordered" }).eq("id",id);
     if(e2){ errBox.innerHTML=`<div class="error-msg">Commande créée mais statut non mis à jour : ${esc(e2.message)}</div>`; }
     await reloadPr(); await reloadPos();
-    state.selectedPrId=null; state.selectedPoId=po.id; state.procSubview="orders"; state.poItems=[];
-    render(); await loadPoItems(id); return;
+    state.selectedPrId=null; state.selectedPoId=po.id; state.procSubview="orders"; state.poReceiving=false;
+    const full=state.pos.find(x=>x.id===po.id)||po;
+    render(); await loadPoFull(full); return;
   }
   if(action==="pr-item-add"){
     const desc=document.getElementById("pi-desc").value.trim();
