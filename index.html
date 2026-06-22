@@ -1723,7 +1723,7 @@ async function onAction(e){
       const { data, error } = await sb.functions.invoke("notify-user", { body:{ recipient_id, ticket_id:id, ticket_no:t?t.ticket_no:"", subject:t?t.subject:"", message, tagger_name:myName() } });
       if(error){
         let detail="";
-        try{ const b=await error.context.json(); detail=b.error||b.detail||""; }
+        try{ const b=await error.context.json(); detail=[b.error,b.detail].filter(Boolean).join(" — "); }
         catch(_){ try{ detail=await error.context.text(); }catch(__){} }
         throw new Error(detail||error.message);
       }
