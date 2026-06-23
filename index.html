@@ -253,7 +253,24 @@ function periodRange(){
 }
 function inPeriod(t){ const r=periodRange(); const ms=new Date(t.created_at).getTime(); return ms>=r.from && ms<=r.to; }
 
-function render(){ document.getElementById("app").innerHTML = renderApp(); bindEvents(); ensureMonitorTimers(); applyBannerSpeed(); }
+function render(){
+  document.getElementById("app").innerHTML = renderApp();
+  try{ ensureMonitorTimers(); }catch(e){}
+  try{ bindEvents(); }catch(e){}
+  try{ applyBannerSpeed(); }catch(e){}
+}
+// Mur d'écran 24/7 : quand l'onglet/écran redevient visible, on force une actualisation
+// et on relance les minuteurs (les navigateurs throttlent les onglets en arrière-plan).
+document.addEventListener("visibilitychange", ()=>{
+  if(!document.hidden && isMonitor()){
+    ensureMonitorTimers();
+    reloadTickets().then(()=>{
+      state.lastSync=Date.now();
+      const dyn=document.getElementById("mon-dynamic");
+      if(state.view==="monitor" && dyn){ dyn.innerHTML=monDynamicHtml(); } else { render(); }
+    }).catch(()=>{});
+  }
+});
 
 // Vitesse de défilement constante et lente, quelle que soit la longueur de l'annonce.
 function applyBannerSpeed(){
@@ -272,12 +289,13 @@ function ensureMonitorTimers(){
   if(on && !monDataTimer){
     monDataTimer = setInterval(async ()=>{
       if(!isMonitor()){ clearInterval(monDataTimer); monDataTimer=null; return; }
+      if(document.hidden) return;            // l'onglet reviendra via visibilitychange
       try{
         await reloadTickets(); state.lastSync=Date.now();
         const dyn=document.getElementById("mon-dynamic");
-        if(state.view==="monitor" && dyn){ dyn.innerHTML=monDynamicHtml(); } // bandeau préservé : pas de saut du défilement
+        if(state.view==="monitor" && dyn){ dyn.innerHTML=monDynamicHtml(); }
         else { render(); }
-      }catch(e){}
+      }catch(e){ /* on réessaiera au prochain tick */ }
     }, 10000);
   }
   if(on && !monClockTimer){
