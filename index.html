@@ -1541,7 +1541,16 @@ function maintAnnonces(){
   const audLabel=a=>({all:"Utilisateurs",viewer:"Mur d'écran",both:"Tous + écran"}[a.audience]||"Utilisateurs");
   const rows=list.map(a=>`<div class="ticket-row" style="cursor:default;border-left-color:var(--brand-2);">
       <div class="col-main"><div class="subject">${esc(a.title)} <span class="badge closed">Active</span> <span class="badge svc">${audLabel(a)}</span></div><div class="meta"><span>${esc(a.body||"")}</span></div><div class="meta"><span class="ticket-id">${esc(a.author?a.author.full_name:"")}</span><span>${a.publish_date?new Date(a.publish_date).toLocaleDateString("fr-FR"):""}</span></div></div>
-      <div class="col-status"><div class="btn-row"><button class="btn tiny secondary" data-action="toggle-announcement" data-id="${a.id}">Désactiver</button><button class="btn tiny danger" data-action="del-announcement" data-id="${a.id}">Supprimer</button></div></div></div>`).join("");
+      <div class="col-status"><div class="btn-row" style="flex-wrap:wrap;gap:6px;align-items:center;">
+        <select id="aud-${a.id}" style="font-size:12px;padding:4px 6px;">
+          <option value="all" ${(a.audience==='all'||!a.audience)?'selected':''}>Utilisateurs</option>
+          <option value="viewer" ${a.audience==='viewer'?'selected':''}>Mur d'écran</option>
+          <option value="both" ${a.audience==='both'?'selected':''}>Les deux</option>
+        </select>
+        <button class="btn tiny" data-action="set-announcement-audience" data-id="${a.id}">Appliquer</button>
+        <button class="btn tiny secondary" data-action="toggle-announcement" data-id="${a.id}">Désactiver</button>
+        <button class="btn tiny danger" data-action="del-announcement" data-id="${a.id}">Supprimer</button>
+      </div></div></div>`).join("");
   return `<div class="card" style="margin-bottom:20px;"><div class="section-label">Publier une annonce</div>
       <div class="field"><label for="an-title">Titre</label><input type="text" id="an-title" placeholder="Ex : Maintenance MEDLOGIX samedi"></div>
       <div class="field"><label for="an-body">Texte</label><textarea id="an-body" placeholder="Message diffusé."></textarea></div>
@@ -2074,8 +2083,17 @@ async function onAction(e){
     if(!title){ errBox.innerHTML=`<div class="error-msg">Titre obligatoire.</div>`; return; }
     busy("Publication…");
     const { error } = await sb.from("announcements").insert({ title, body, category, audience, author_id:uid(), is_active:true, scroll:true });
-    if(error){ errBox.innerHTML=`<div class="error-msg">${esc(error.message)}</div>`; unbusy(); return; }
+    if(error){
+      const hint = /audience/i.test(error.message||"") ? " — la colonne « audience » est absente : exécutez le script medlog-supabase-audience.sql dans Supabase (SQL Editor)." : "";
+      errBox.innerHTML=`<div class="error-msg">${esc(error.message)}${esc(hint)}</div>`; unbusy(); return;
+    }
     state.announcements=await fetchAnnouncements(); render(); return;
+  }
+  if(action==="set-announcement-audience"){
+    const id=el.dataset.id; const audience=document.getElementById("aud-"+id).value;
+    busy("…");
+    try{ const {error}=await sb.from("announcements").update({audience}).eq("id",id); if(error) throw error; state.announcements=await fetchAnnouncements(); render(); }
+    catch(err){ alert("Échec : "+(err.message||String(err))+"\n\nSi le message mentionne la colonne « audience », exécutez le script medlog-supabase-audience.sql dans Supabase."); unbusy(); } return;
   }
   if(action==="toggle-announcement"){ busy("…"); await sb.from("announcements").update({is_active:false}).eq("id",el.dataset.id); state.announcements=await fetchAnnouncements(); render(); return; }
   if(action==="del-announcement"){ if(!confirm("Supprimer cette annonce ?")) return; busy("…"); await sb.from("announcements").delete().eq("id",el.dataset.id); state.announcements=await fetchAnnouncements(); render(); return; }
