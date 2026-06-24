@@ -264,11 +264,7 @@ function render(){
 document.addEventListener("visibilitychange", ()=>{
   if(!document.hidden && isMonitor()){
     ensureMonitorTimers();
-    reloadTickets().then(()=>{
-      state.lastSync=Date.now();
-      const dyn=document.getElementById("mon-dynamic");
-      if(state.view==="monitor" && dyn){ dyn.innerHTML=monDynamicHtml(); } else { render(); }
-    }).catch(()=>{});
+    monRefresh().catch(()=>{});
   }
 });
 
@@ -283,25 +279,43 @@ function applyBannerSpeed(){
 window.addEventListener("resize", ()=>{ applyBannerSpeed(); });
 
 function isMonitor(){ return roleName()==="viewer"; }
-let monDataTimer=null, monClockTimer=null;
+let monDataTimer=null, monClockTimer=null, monReloadTimer=null;
+let monBannerSig=null;
+function viewerAnnSig(){ try{ return JSON.stringify(announcementsForViewer().map(a=>[a.id,a.title,a.body,a.audience,a.is_active])); }catch(e){ return ""; } }
+async function monRefresh(){
+  const [tk, an] = await Promise.all([ fetchTickets(), fetchAnnouncements() ]);
+  state.tickets=tk; state.announcements=an; state.lastSync=Date.now();
+  if(state.view==="monitor"){
+    const dyn=document.getElementById("mon-dynamic");
+    if(!dyn){ render(); return; }
+    dyn.innerHTML=monDynamicHtml();
+    // Bandeau d'annonces : reconstruit uniquement si le contenu a changé, pour ne pas casser le défilement.
+    const sig=viewerAnnSig(); const bn=document.getElementById("mon-banner");
+    if(bn && sig!==monBannerSig){ bn.innerHTML=announcementBanner(announcementsForViewer()); monBannerSig=sig; applyBannerSpeed(); }
+  } else { render(); }
+}
 function ensureMonitorTimers(){
   const on = isMonitor() && !state.booting;
+  if(on && monBannerSig===null){ monBannerSig=viewerAnnSig(); }
   if(on && !monDataTimer){
     monDataTimer = setInterval(async ()=>{
       if(!isMonitor()){ clearInterval(monDataTimer); monDataTimer=null; return; }
-      if(document.hidden) return;            // l'onglet reviendra via visibilitychange
-      try{
-        await reloadTickets(); state.lastSync=Date.now();
-        const dyn=document.getElementById("mon-dynamic");
-        if(state.view==="monitor" && dyn){ dyn.innerHTML=monDynamicHtml(); }
-        else { render(); }
-      }catch(e){ /* on réessaiera au prochain tick */ }
+      try{ await monRefresh(); }
+      catch(e){ const el=document.getElementById("mon-sync"); if(el) el.textContent=" · ⚠ synchro impossible — nouvelle tentative…"; }
     }, 10000);
   }
   if(on && !monClockTimer){
     monClockTimer = setInterval(()=>{ const c=document.getElementById("mon-clock"); if(c) c.textContent=new Date().toLocaleTimeString("fr-FR"); }, 1000);
   }
-  if(!on){ if(monDataTimer){clearInterval(monDataTimer);monDataTimer=null;} if(monClockTimer){clearInterval(monClockTimer);monClockTimer=null;} }
+  if(on && !monReloadTimer){
+    // Filet de sécurité infaillible : rechargement complet de la page toutes les 5 minutes.
+    monReloadTimer = setInterval(()=>{ if(isMonitor()) location.reload(); }, 300000);
+  }
+  if(!on){
+    if(monDataTimer){clearInterval(monDataTimer);monDataTimer=null;}
+    if(monClockTimer){clearInterval(monClockTimer);monClockTimer=null;}
+    if(monReloadTimer){clearInterval(monReloadTimer);monReloadTimer=null;}
+  }
 }
 
 // --- Boot / Auth ---
@@ -1563,7 +1577,7 @@ function monBars(items){
   return items.map(i=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;"><div style="width:130px;font-size:12px;color:#9fb3d1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(i.label)}">${esc(i.label)}</div><div style="flex:1;height:7px;background:#1c2a42;border-radius:5px;overflow:hidden;"><div style="height:100%;width:${Math.round(i.count/max*100)}%;background:#3aa0ff;border-radius:5px;"></div></div><div style="font-family:var(--mono);font-size:12px;width:24px;text-align:right;color:#cfe0f5;">${i.count}</div></div>`).join("");
 }
 function renderMonitor(){
-  return `<div class="mon"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px;flex-wrap:wrap;gap:8px;"><div style="font-size:20px;font-weight:800;">Monitoring MEDLOGIX — avancement des tâches</div><div style="font-size:12px;color:#7e93b3;">Supervision en lecture seule</div></div>${announcementBanner(announcementsForViewer())}<div id="mon-dynamic">${monDynamicHtml()}</div></div>`;
+  return `<div class="mon"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px;flex-wrap:wrap;gap:8px;"><div style="font-size:20px;font-weight:800;">Monitoring MEDLOGIX — avancement des tâches</div><div style="font-size:12px;color:#7e93b3;">Supervision en lecture seule</div></div><div id="mon-banner">${announcementBanner(announcementsForViewer())}</div><div id="mon-dynamic">${monDynamicHtml()}</div></div>`;
 }
 function monDynamicHtml(){
   const ml=medlogixTickets(); const c=s=>ml.filter(t=>t.status===s).length;
@@ -1587,7 +1601,7 @@ function monDynamicHtml(){
   const others=(()=>{const m={};state.tickets.filter(t=>t.service!=="MEDLOGIX"&&t.status!=="Closed").forEach(t=>{m[t.service]=(m[t.service]||0)+1;});return Object.keys(m).map(k=>({label:k,count:m[k]}));})();
   const othersTotal=others.reduce((a,b)=>a+b.count,0);
   const sidePanel=`<div class="mon-panel"><h3>Répartition par statut (MEDLOGIX)</h3>${monBars(byStatus)}</div><div class="mon-panel"><h3>Par module (ouverts)</h3>${monBars(byModule)}</div><div class="mon-panel"><h3>Autres services (non prioritaires) — ${othersTotal} ouverts</h3><div class="mon-other">${others.length?others.map(o=>`<span class="chip">${esc(o.label.split(" (")[0])} : ${o.count}</span>`).join(""):'<span style="color:#7e93b3;font-size:12.5px;">Aucun</span>'}</div></div>`;
-  return `${kpis}<div class="mon-grid"><div>${mainPanel}</div><div>${sidePanel}</div></div><div class="mon-foot"><span>Dernière synchro : ${state.lastSync?new Date(state.lastSync).toLocaleTimeString("fr-FR"):"—"} · actualisation automatique toutes les 10 s</span><span>${ml.length} tickets MEDLOGIX au total · ${ml.filter(t=>t.status==="Closed").length} clos</span></div>`;
+  return `${kpis}<div class="mon-grid"><div>${mainPanel}</div><div>${sidePanel}</div></div><div class="mon-foot"><span>Dernière synchro : ${state.lastSync?new Date(state.lastSync).toLocaleTimeString("fr-FR"):"—"} · actualisation auto 10 s · rechargement complet 5 min<span id="mon-sync"></span></span><span>${ml.length} tickets MEDLOGIX au total · ${ml.filter(t=>t.status==="Closed").length} clos</span></div>`;
 }
 
 // Onglet Annonces du mur d'écran : liste en lecture seule des annonces ciblant l'écran.
