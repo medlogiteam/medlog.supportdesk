@@ -292,6 +292,10 @@ async function monRefresh(){
     // Bandeau d'annonces : reconstruit uniquement si le contenu a changé, pour ne pas casser le défilement.
     const sig=viewerAnnSig(); const bn=document.getElementById("mon-banner");
     if(bn && sig!==monBannerSig){ bn.innerHTML=announcementBanner(announcementsForViewer()); monBannerSig=sig; applyBannerSpeed(); }
+  } else if(state.view==="announces"){
+    // Onglet « Annonces de mise à jour » : on ne redessine que si les annonces ont changé.
+    const sig=viewerAnnSig();
+    if(sig!==monBannerSig){ monBannerSig=sig; render(); }
   } else { render(); }
 }
 function ensureMonitorTimers(){
