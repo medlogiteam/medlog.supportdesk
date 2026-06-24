@@ -339,6 +339,17 @@ async function afterLogin(){
   }catch(e){ state.loadError = e.message||String(e); }
   state.booting=false;
   state.view = isMonitor() ? "monitor" : "dashboard";
+  // Lien profond : ?ticket=INC... ouvre directement le ticket concerné.
+  const tkParam = isMonitor() ? null : new URLSearchParams(location.search).get("ticket");
+  if(tkParam && !state.loadError){
+    const t = state.tickets.find(x=> (x.ticket_no||"")===tkParam || x.id===tkParam);
+    state.view="tickets";
+    if(t) state.selectedTicketId=t.id;
+    try{ history.replaceState(null,"",location.pathname); }catch(_){}
+    render();
+    if(t) loadActivity(t.id);
+    return;
+  }
   render();
 }
 async function loadProfile(){
