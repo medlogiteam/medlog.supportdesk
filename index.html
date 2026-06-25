@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MEDLOG IT Ops — Support Desk</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
   :root{
     --bg:#EEF1F4; --surface:#FFF; --surface-2:#F6F8FA; --ink:#0F1B2D; --ink-soft:#54657A; --ink-faint:#8A99AC;
@@ -203,7 +204,8 @@ let state = {
   pos:[], vendors:[], vendorsLoaded:false, procSubview:"requests", selectedPoId:null, poItems:[],
   poReceipts:[], receivedByItem:{}, poReceiving:false,
   projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[],
-  execLoaded:false, execData:null
+  execLoaded:false, execData:null,
+  reportSource:"tickets", reportFilters:{}, reportRows:null, reportRunning:false, reportError:null
 };
 
 // --- Utilitaires ---
@@ -414,7 +416,8 @@ function navGroups(){
   return [
     { key:"board", label:"Tableau de bord", leaves:[
         {v:"dashboard", l:"Opérationnel", show:()=>true},
-        {v:"exec", l:"Direction", show:()=>canViewExec()} ] },
+        {v:"exec", l:"Direction", show:()=>canViewExec()},
+        {v:"reports", l:"Rapports", show:()=>canViewExec()} ] },
     { key:"tickets", label:(r==="user"?"Mes tickets":"Tickets"), leaves:[ {v:"tickets", l:"Tickets", show:()=>true} ] },
     { key:"resources", label:"Ressources", leaves:[
         {v:"assets", l:"Actifs", show:()=>canViewAssets()},
@@ -439,6 +442,7 @@ function renderMain(){
   const sub=sectionSubnav();
   if(state.view==="dashboard") return sub+renderDashboard();
   if(state.view==="exec") return canViewExec()?sub+renderExec():renderDashboard();
+  if(state.view==="reports") return canViewExec()?sub+renderReports():renderDashboard();
   if(state.view==="tickets") return renderTicketsArea();
   if(state.view==="assets") return canViewAssets()?sub+renderAssetsArea():renderDashboard();
   if(state.view==="stock") return canViewStock()?sub+renderStockArea():renderDashboard();
@@ -600,6 +604,146 @@ function renderExecAlerts(d){
     return `<div style="margin-bottom:10px;"><div style="font-weight:600;font-size:13px;color:${g.c};display:flex;align-items:center;gap:8px;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${g.c};"></span>${g.t} <span style="color:var(--ink-soft);font-weight:400;">(${g.items.length})</span></div><ul style="margin:4px 0 0 18px;font-size:13px;">${shown}${more}</ul></div>`;
   };
   return `<div class="card" style="margin-bottom:16px;border-left:4px solid #d9534f;"><div class="section-label">Centre d'alertes — ${total} point(s) à traiter</div>${groups.map(block).join("")}</div>`;
+}
+
+// =========================== RAPPORTS (générateur d'états) ===========================
+function dOnly(v){ const d=new Date(v); return (!v||isNaN(d))?"":d.toLocaleDateString("fr-FR"); }
+function num(v){ return Number(v)||0; }
+const REPORTS = {
+  tickets: { label:"Tickets", table:"tickets",
+    select:"*, requester:requester_id(full_name), assignee:assignee_id(full_name)", dateField:"created_at",
+    columns:[
+      {k:"N°", g:r=>r.ticket_no}, {k:"Sujet", g:r=>r.subject}, {k:"Service", g:r=>r.service},
+      {k:"Module", g:r=>r.module}, {k:"Écran", g:r=>r.screen}, {k:"Priorité", g:r=>r.priority},
+      {k:"Statut", g:r=>r.status}, {k:"Demandeur", g:r=>r.requester?r.requester.full_name:""},
+      {k:"Affecté à", g:r=>r.assignee?r.assignee.full_name:""}, {k:"Créé le", g:r=>dOnly(r.created_at)} ],
+    filters:[
+      {type:"select", field:"status", label:"Statut", opts:()=>["Pending","In Progress","Testing","Closed","Reopened"]},
+      {type:"select", field:"service", label:"Service", opts:()=>getServices()},
+      {type:"select", field:"priority", label:"Priorité", opts:()=>getPriorities()},
+      {type:"select", field:"module", label:"Module", opts:()=>lkVals("medlogix_module",[])},
+      {type:"daterange", field:"created_at", label:"Période (création)"},
+      {type:"text", field:"subject", label:"Sujet contient"} ] },
+  assets: { label:"Actifs (parc)", table:"assets",
+    select:"*, category:category_id(name), location:location_id(name), assigned:assigned_user_id(full_name)", dateField:"created_at",
+    columns:[
+      {k:"Tag", g:r=>r.asset_tag}, {k:"Désignation", g:r=>r.name},
+      {k:"Catégorie", g:r=>r.category?r.category.name:""}, {k:"Statut", g:r=>r.status},
+      {k:"Marque", g:r=>r.brand}, {k:"Modèle", g:r=>r.model},
+      {k:"N° série", g:r=>r.serial}, {k:"Site", g:r=>r.location?r.location.name:""},
+      {k:"Affecté à", g:r=>r.assigned?r.assigned.full_name:""}, {k:"Garantie", g:r=>dOnly(r.warranty_expiry)} ],
+    filters:[
+      {type:"select", field:"status", label:"Statut", opts:()=>["In Stock","Assigned","In Repair","Retired"]},
+      {type:"text", field:"name", label:"Désignation contient"},
+      {type:"text", field:"brand", label:"Marque contient"} ] },
+  stock: { label:"Stock", table:"stock_items", baseEq:{is_active:true},
+    select:"*, category:category_id(name), location:location_id(name)", dateField:"name",
+    columns:[
+      {k:"Article", g:r=>r.name}, {k:"SKU", g:r=>r.sku}, {k:"Catégorie", g:r=>r.category?r.category.name:""},
+      {k:"Unité", g:r=>r.unit}, {k:"Quantité", g:r=>num(r.quantity)}, {k:"Seuil mini", g:r=>num(r.min_threshold)},
+      {k:"Site", g:r=>r.location?r.location.name:""} ],
+    filters:[
+      {type:"lowstock", field:"_lowstock", label:"Niveau de stock"},
+      {type:"text", field:"name", label:"Article contient"} ] },
+  pr: { label:"Demandes d'achat", table:"purchase_requests",
+    select:"*, requester:requester_id(full_name), department:department_id(name), location:location_id(name)", dateField:"created_at",
+    columns:[
+      {k:"N°", g:r=>r.request_no}, {k:"Demandeur", g:r=>r.requester?r.requester.full_name:""},
+      {k:"Service", g:r=>r.department?r.department.name:""}, {k:"Statut", g:r=>r.status},
+      {k:"Coût estimé (FCFA)", g:r=>num(r.estimated_cost)}, {k:"Créée le", g:r=>dOnly(r.created_at)} ],
+    filters:[
+      {type:"select", field:"status", label:"Statut", opts:()=>["open","partial","closed","cancelled"]},
+      {type:"daterange", field:"created_at", label:"Période (création)"} ] },
+  po: { label:"Commandes", table:"purchase_orders",
+    select:"*, vendor:vendor_id(name)", dateField:"created_at",
+    columns:[
+      {k:"N°", g:r=>r.po_no}, {k:"Fournisseur", g:r=>r.vendor?r.vendor.name:""},
+      {k:"Statut", g:r=>r.status}, {k:"Montant (FCFA)", g:r=>num(r.amount)}, {k:"Créée le", g:r=>dOnly(r.created_at)} ],
+    filters:[
+      {type:"select", field:"status", label:"Statut", opts:()=>["open","partial","received","cancelled"]},
+      {type:"daterange", field:"created_at", label:"Période (création)"} ] },
+  projects: { label:"Projets", table:"projects",
+    select:"*, manager:manager_id(full_name), location:location_id(name)", dateField:"created_at",
+    columns:[
+      {k:"N°", g:r=>r.project_no}, {k:"Projet", g:r=>r.name}, {k:"Chef", g:r=>r.manager?r.manager.full_name:""},
+      {k:"Statut", g:r=>projectStatusLabel(r.status)}, {k:"Priorité", g:r=>r.priority},
+      {k:"Avancement %", g:r=>num(r.progress_pct)}, {k:"Site", g:r=>r.location?r.location.name:""},
+      {k:"Début", g:r=>dOnly(r.start_date)}, {k:"Échéance", g:r=>dOnly(r.end_date)} ],
+    filters:[
+      {type:"select", field:"status", label:"Statut", opts:()=>projectStatuses()},
+      {type:"select", field:"priority", label:"Priorité", opts:()=>getPriorities()} ] },
+};
+function renderReports(){
+  const cfg=REPORTS[state.reportSource], f=state.reportFilters||{};
+  const srcOpts=Object.entries(REPORTS).map(([k,v])=>`<option value="${k}" ${state.reportSource===k?'selected':''}>${esc(v.label)}</option>`).join("");
+  const field=(label,inner)=>`<div class="field"><label>${esc(label)}</label>${inner}</div>`;
+  const controls=cfg.filters.map(ft=>{
+    if(ft.type==="select"){ const opts=["all",...ft.opts()]; const cur=f[ft.field]||"all";
+      return field(ft.label, `<select data-rf="${ft.field}">${opts.map(o=>`<option value="${esc(o)}" ${cur===o?'selected':''}>${o==='all'?'Tous':esc(o)}</option>`).join("")}</select>`); }
+    if(ft.type==="lowstock"){ const cur=f._lowstock||"all";
+      return field(ft.label, `<select data-rf="_lowstock"><option value="all" ${cur==='all'?'selected':''}>Tous</option><option value="yes" ${cur==='yes'?'selected':''}>Sous le seuil</option></select>`); }
+    if(ft.type==="text") return field(ft.label, `<input type="text" data-rf="${ft.field}" value="${esc(f[ft.field]||'')}">`);
+    if(ft.type==="daterange") return field(ft.label, `<div class="btn-row" style="align-items:center;gap:6px;"><input type="date" data-rf="${ft.field}_du" value="${esc(f[ft.field+'_du']||'')}"><span>→</span><input type="date" data-rf="${ft.field}_au" value="${esc(f[ft.field+'_au']||'')}"></div>`);
+    return "";
+  }).join("");
+  let results="";
+  if(state.reportError){ results=`<div class="error-msg" style="margin-top:14px;">${esc(state.reportError)}</div>`; }
+  else if(state.reportRunning){ results=`<div class="empty-state">Génération…</div>`; }
+  else if(state.reportRows!=null){
+    const rows=state.reportRows;
+    const head=`<tr>${cfg.columns.map(c=>`<th style="text-align:left;padding:8px 10px;border-bottom:2px solid var(--border);font-size:12px;color:var(--ink-soft);white-space:nowrap;">${esc(c.k)}</th>`).join("")}</tr>`;
+    const body=rows.slice(0,500).map(r=>`<tr>${cfg.columns.map(c=>{const v=c.g(r); return `<td style="padding:7px 10px;border-bottom:1px solid var(--border);font-size:13px;white-space:nowrap;">${esc(v==null?"":String(v))}</td>`;}).join("")}</tr>`).join("");
+    results=`<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin:16px 0 8px;">
+        <div class="section-label" style="margin:0;">${rows.length} ligne(s)${rows.length>500?" — 500 affichées, export complet":""}</div>
+        <div class="btn-row">${rows.length?`<button class="btn tiny" data-action="report-export-xlsx">Exporter Excel</button><button class="btn tiny secondary" data-action="report-export-csv">CSV</button>`:""}</div>
+      </div>
+      ${rows.length?`<div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;"><table style="border-collapse:collapse;width:100%;">${head}${body}</table></div>`:`<div class="empty-state">Aucun résultat pour ces critères.</div>`}`;
+  }
+  return `<h1 class="page-title">Rapports</h1><p class="page-sub">Choisissez une source, affinez les critères, générez et exportez.</p>
+    <div class="card"><div class="field" style="max-width:320px;"><label for="report-src">Source de données</label><select id="report-src">${srcOpts}</select></div>
+      <div class="section-label" style="margin-top:8px;">Critères</div>
+      <div class="filters" style="flex-wrap:wrap;">${controls}</div>
+      <div class="btn-row"><button class="btn" data-action="report-run">Générer le rapport</button><button class="btn secondary" data-action="report-reset">Réinitialiser</button></div>
+    </div>
+    ${results}`;
+}
+async function runReport(){
+  const cfg=REPORTS[state.reportSource], f=state.reportFilters||{};
+  let q=sb.from(cfg.table).select(cfg.select);
+  if(cfg.baseEq) Object.entries(cfg.baseEq).forEach(([k,v])=>{ q=q.eq(k,v); });
+  cfg.filters.forEach(ft=>{
+    if(ft.field.startsWith("_")) return; // filtre client
+    const v=f[ft.field];
+    if(ft.type==="select"){ if(v && v!=="all") q=q.eq(ft.field,v); }
+    else if(ft.type==="text"){ if(v && v.trim()) q=q.ilike(ft.field,`%${v.trim()}%`); }
+    else if(ft.type==="daterange"){ const du=f[ft.field+"_du"], au=f[ft.field+"_au"]; if(du) q=q.gte(ft.field,du); if(au) q=q.lte(ft.field,au+"T23:59:59"); }
+  });
+  if(cfg.dateField) q=q.order(cfg.dateField,{ascending: cfg.dateField==="name"});
+  q=q.limit(5000);
+  state.reportRunning=true; state.reportError=null; render();
+  try{
+    let { data, error } = await q; if(error) throw error;
+    data=data||[];
+    if(f._lowstock==="yes") data=data.filter(r=>num(r.quantity)<num(r.min_threshold));
+    state.reportRows=data; state.reportRunning=false; render();
+  }catch(e){ state.reportRunning=false; state.reportError="Erreur : "+(e.message||String(e)); render(); }
+}
+function exportReport(fmt){
+  const cfg=REPORTS[state.reportSource], rows=state.reportRows||[];
+  if(!rows.length) return;
+  const data=rows.map(r=>{ const o={}; cfg.columns.forEach(c=>{ o[c.k]=c.g(r); }); return o; });
+  const fname=`Rapport_${cfg.label.replace(/[^a-zA-Z0-9]/g,"_")}_${new Date().toISOString().slice(0,10)}`;
+  if(fmt==="xlsx" && window.XLSX){
+    const ws=XLSX.utils.json_to_sheet(data, {header:cfg.columns.map(c=>c.k)});
+    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Rapport");
+    XLSX.writeFile(wb, fname+".xlsx"); return;
+  }
+  const cols=cfg.columns.map(c=>c.k);
+  const cell=v=>{ v=(v==null?"":String(v)); return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+  const lines=[cols.join(";")].concat(data.map(o=>cols.map(c=>cell(o[c])).join(";")));
+  const blob=new Blob(["\ufeff"+lines.join("\r\n")],{type:"text/csv;charset=utf-8;"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=fname+".csv"; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1500);
 }
 
 // =========================== TICKETS ===========================
@@ -1677,6 +1821,13 @@ function bindEvents(){
   const sts=document.getElementById("st-search");
   if(sts){ sts.addEventListener("input",e=>{state.stockSearch=e.target.value; render();}); sts.focus(); sts.setSelectionRange(sts.value.length,sts.value.length); }
   wire("pj-status",e=>{state.projectFilter.status=e.target.value; render();});
+  const rsrc=document.getElementById("report-src");
+  if(rsrc) rsrc.addEventListener("change",e=>{ state.reportSource=e.target.value; state.reportFilters={}; state.reportRows=null; state.reportError=null; render(); });
+  document.querySelectorAll("[data-rf]").forEach(el=>{
+    const key=el.getAttribute("data-rf");
+    const ev = el.tagName==="SELECT" ? "change" : "input";
+    el.addEventListener(ev, e=>{ state.reportFilters[key]=el.value; });
+  });
   const pjs=document.getElementById("pj-search");
   if(pjs){ pjs.addEventListener("input",e=>{state.projectFilter.search=e.target.value; render();}); pjs.focus(); pjs.setSelectionRange(pjs.value.length,pjs.value.length); }
   wire("cf",e=>{state.customFrom=e.target.value; render();});
@@ -2017,6 +2168,10 @@ async function onAction(e){
   }
 
   if(action==="exec-refresh"){ state.execLoaded=false; render(); return; }
+  if(action==="report-run"){ await runReport(); return; }
+  if(action==="report-reset"){ state.reportFilters={}; state.reportRows=null; state.reportError=null; render(); return; }
+  if(action==="report-export-xlsx"){ exportReport("xlsx"); return; }
+  if(action==="report-export-csv"){ exportReport("csv"); return; }
   // ---- Projets (Phase 4) ----
   if(action==="project-new"){ state.projectNew=true; state.selectedProjectId=null; render(); return; }
   if(action==="project-cancel"){ state.projectNew=false; render(); return; }
