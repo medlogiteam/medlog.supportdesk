@@ -390,7 +390,7 @@ function renderApp(){
   if(state.profile && isMonitor() && !state.booting && !state.loadError){
     return `${renderHeader()}<div class="monitor-wrap">${renderMain()}</div>`;
   }
-  return `${renderHeader()}<main>${renderMain()}</main><footer class="app-footer">MEDLOG IT Ops</footer>`;
+  return `${renderHeader()}<main>${renderMain()}</main><footer class="app-footer">MEDLOG IT Ops — Phase 1 (Supabase)</footer>`;
 }
 function renderHeader(){
   let nav="", session="";
@@ -411,7 +411,7 @@ function renderHeader(){
       const first=g.leaves.find(lf=>lf.show())||g.leaves[0];
       return `<button data-action="nav" data-view="${first.v}" class="${active(g)?'active':''}">${g.label}</button>`;
     }).join("")}</div>`;
-    session=`<div class="session-info"><span class="role-chip">${ROLE_LABEL[r]||r}</span>${esc(myName())}<button class="link" data-action="logout">déconnexion</button></div>`;
+    session=`<div class="session-info"><span class="role-chip">${ROLE_LABEL[r]||r}</span>${esc(myName())}<button class="link" data-action="nav" data-view="account">mon compte</button><button class="link" data-action="logout">déconnexion</button></div>`;
   }
   const installBtn = state.canInstall ? `<button class="no-print" data-action="install-app" title="Installer l'application sur ce poste" style="border:1px solid rgba(255,255,255,.55);border-radius:6px;padding:5px 11px;color:#fff;background:transparent;cursor:pointer;font-size:13px;white-space:nowrap;">⬇ Installer l'app</button>` : "";
   return `<header class="topbar"><div class="brand"><div class="mark">ML</div><div><div class="name">MEDLOG IT Ops</div><div class="sub">${isMonitor()?"Monitoring":"Support Desk"}</div></div></div>${nav}<div class="topbar-right" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">${installBtn}${session}</div></header>`;
@@ -445,6 +445,7 @@ function renderMain(){
   if(state.loadError) return `<div class="gate"><h1>Erreur de chargement</h1><div class="card"><div class="error-msg">${esc(state.loadError)}</div><button class="btn" data-action="retry" style="margin-top:12px;">Réessayer</button></div></div>`;
   if(isMonitor()) return state.view==="report" ? renderReport() : state.view==="announces" ? renderMonitorAnnonces() : renderMonitor();
   const sub=sectionSubnav();
+  if(state.view==="account") return renderAccount();
   if(state.view==="dashboard") return sub+renderDashboard();
   if(state.view==="exec") return canViewExec()?sub+renderExec():renderDashboard();
   if(state.view==="reports") return canViewExec()?sub+renderReports():renderDashboard();
@@ -455,6 +456,25 @@ function renderMain(){
   if(state.view==="projects") return canViewProjects()?renderProjectsArea():renderDashboard();
   if(state.view==="maintenance") return isAdmin()?renderMaintenance():renderDashboard();
   return "";
+}
+
+// =========================== MON COMPTE ===========================
+function renderAccount(){
+  const email=(state.profile&&state.profile.email)||(state.session&&state.session.user&&state.session.user.email)||"";
+  const r=roleName();
+  const row=(k,v)=>`<div style="display:flex;gap:12px;margin:6px 0;"><span style="color:var(--ink-soft);min-width:90px;">${k}</span><strong>${v}</strong></div>`;
+  return `<h1 class="page-title">Mon compte</h1><p class="page-sub">Vos informations et la modification de votre mot de passe.</p>
+    <div class="card" style="margin-bottom:18px;"><div class="section-label">Informations</div>
+      ${row("Nom",esc(myName()))}${row("E-mail",esc(email))}${row("Rôle",esc(ROLE_LABEL[r]||r))}
+    </div>
+    <div class="card"><div class="section-label">Changer mon mot de passe</div>
+      <div class="field" style="max-width:360px;"><label for="pw-current">Mot de passe actuel</label><input type="password" id="pw-current" autocomplete="current-password"></div>
+      <div class="field" style="max-width:360px;"><label for="pw-new">Nouveau mot de passe</label><input type="password" id="pw-new" autocomplete="new-password" placeholder="au moins 8 caractères"></div>
+      <div class="field" style="max-width:360px;"><label for="pw-confirm">Confirmer le nouveau mot de passe</label><input type="password" id="pw-confirm" autocomplete="new-password"></div>
+      <div id="pw-result"></div>
+      <button class="btn" data-action="change-password" style="margin-top:6px;">Mettre à jour</button>
+      <div class="hint" style="font-size:12px;margin-top:8px;">Après la mise à jour, votre nouveau mot de passe sera demandé à la prochaine connexion.</div>
+    </div>`;
 }
 
 // =========================== LOGIN ===========================
@@ -1869,6 +1889,28 @@ async function onAction(e){
     try{ await deferredInstallPrompt.userChoice; }catch(_){}
     deferredInstallPrompt=null; state.canInstall=false; render(); return;
   }
+  if(action==="change-password"){
+    const cur=(document.getElementById("pw-current").value||"");
+    const n1=(document.getElementById("pw-new").value||"");
+    const n2=(document.getElementById("pw-confirm").value||"");
+    const box=document.getElementById("pw-result");
+    if(!cur){ box.innerHTML=`<div class="error-msg">Saisissez votre mot de passe actuel.</div>`; return; }
+    if(n1.length<8){ box.innerHTML=`<div class="error-msg">Le nouveau mot de passe doit comporter au moins 8 caractères.</div>`; return; }
+    if(n1!==n2){ box.innerHTML=`<div class="error-msg">Les deux nouveaux mots de passe ne correspondent pas.</div>`; return; }
+    if(n1===cur){ box.innerHTML=`<div class="error-msg">Le nouveau mot de passe doit être différent de l'actuel.</div>`; return; }
+    const email=(state.profile&&state.profile.email)||(state.session&&state.session.user&&state.session.user.email);
+    box.innerHTML=""; busy("Mise à jour du mot de passe…");
+    try{
+      const { error: vErr } = await sb.auth.signInWithPassword({ email, password: cur });
+      if(vErr){ unbusy(); box.innerHTML=`<div class="error-msg">Mot de passe actuel incorrect.</div>`; return; }
+      const { error: uErr } = await sb.auth.updateUser({ password: n1 });
+      if(uErr) throw uErr;
+      unbusy();
+      box.innerHTML=`<div class="ok-msg">Mot de passe mis à jour avec succès.</div>`;
+      ["pw-current","pw-new","pw-confirm"].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=""; });
+    }catch(err){ unbusy(); box.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
   if(action==="logout"){ if(monDataTimer){clearInterval(monDataTimer);monDataTimer=null;} if(monClockTimer){clearInterval(monClockTimer);monClockTimer=null;} await sb.auth.signOut(); state.session=null; state.profile=null; state.view="dashboard"; render(); return; }
   if(action==="retry"){ state.booting=true; render(); await afterLogin(); return; }
   if(action==="goto-new"){ state.view="tickets"; state.selectedTicketId=null; state.staffNew=true; if(!state.newService) state.newService=getServices()[0]; render(); return; }
@@ -2367,7 +2409,7 @@ async function onAction(e){
     const ta=document.getElementById("bulk-users"); const box=document.getElementById("bulk-error"); const out=document.getElementById("bulk-results");
     const lines=(ta.value||"").split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
     if(!lines.length){ box.innerHTML=`<div class="error-msg">Collez au moins une ligne.</div>`; return; }
-    const users=lines.map(l=>{ const p=l.split(/[;,]/).map(x=>x.trim()); return { email:(p[0]||"").toLowerCase(), first_name:p[1]||"", last_name:p[2]||"", role:p[3]||"user" }; });
+    const users=lines.map(l=>{ const p=l.split(/[\t;,]/).map(x=>x.trim()); return { email:(p[0]||"").toLowerCase(), first_name:p[1]||"", last_name:p[2]||"", role:p[3]||"user" }; });
     const bad=users.filter(u=>!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(u.email));
     if(bad.length){ box.innerHTML=`<div class="error-msg">${bad.length} ligne(s) sans e-mail valide. Format attendu : email, prénom, nom, rôle.</div>`; return; }
     const default_password=(document.getElementById("bulk-pwd").value||"").trim()||null;
