@@ -186,7 +186,16 @@ const MODULE_TREE = {
   "Dashboard": ["Quotations Dashboard","Job Dashboard","Event Dashboard","Vehicle Dashboard","User Management","Revenue by Clients Report","HAD Report"]
 };
 const STATUSES = ["Pending","In Progress","Testing","Closed","Reopened"];
-const SLA_DAYS = 2;
+// Délais de résolution (SLA) par priorité, en HEURES, comptés depuis la création.
+// Valeurs de secours si la priorité n'a pas de délai défini dans le Dictionnaire.
+const SLA_HOURS = { Critical:4, High:24, Medium:72, Low:120 };
+const SLA_DEFAULT_HOURS = 72; // priorité inconnue / non définie → 3 jours
+function slaHours(t){
+  const lk = state.lookups.find(l=>l.type==="priority" && l.value===t.priority);
+  if(lk && lk.sla_hours!=null && lk.sla_hours!=="") return Number(lk.sla_hours);
+  const v=SLA_HOURS[t.priority]; return (v==null)?SLA_DEFAULT_HOURS:v;
+}
+function fmtSla(h){ return h<24 ? (h+" h") : ((h%24===0?(h/24):(h/24).toFixed(1))+" j"); }
 const ROLE_LABEL = { admin:"Admin", it_manager:"IT Manager", technician:"Technicien", asset_manager:"Gest. parc", store_keeper:"Magasinier", buyer:"Acheteur", project_manager:"Chef projet", approver:"Approbateur", user:"Utilisateur", viewer:"Lecture seule" };
 
 // --- État ---
@@ -209,14 +218,17 @@ let state = {
   projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[],
   execLoaded:false, execData:null,
   reportSource:"tickets", reportFilters:{}, reportRows:null, reportRunning:false, reportError:null,
-  canInstall:false
+  canInstall:false,
+  settings:{}, settingsLoaded:false
 };
 
 // --- Utilitaires ---
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function fmtDate(v){ const d=new Date(v); return isNaN(d)?"—":(d.toLocaleDateString("fr-FR",{day:"2-digit",month:"short",year:"numeric"})+" · "+d.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})); }
 function daysSince(v){ return Math.floor((Date.now()-new Date(v).getTime())/86400000); }
-function isOverdue(t){ return t.status!=="Closed" && daysSince(t.created_at) >= SLA_DAYS; }
+function hoursSince(v){ return (Date.now()-new Date(v).getTime())/3600000; }
+function ticketDeadline(t){ return new Date(new Date(t.created_at).getTime() + slaHours(t)*3600000); }
+function isOverdue(t){ return t.status!=="Closed" && hoursSince(t.created_at) >= slaHours(t); }
 function statusClass(s){ return {"Pending":"pending","In Progress":"progress","Testing":"testing","Closed":"closed","Reopened":"reopened"}[s]||"pending"; }
 function statusRowClass(s){ return "status-"+String(s).replace(/\s+/g,"-"); }
 function priorityRank(p){ return {"Critical":0,"High":1,"Medium":2,"Low":3}[p] ?? 4; }
@@ -235,6 +247,24 @@ function canManageProjects(){ return ["admin","project_manager"].includes(roleNa
 function canViewExec(){ return ["admin","it_manager"].includes(roleName()); }
 function canCreate(){ return roleName() && roleName()!=="viewer"; }
 function uid(){ return state.session ? state.session.user.id : null; }
+
+// =========================== PARAMÈTRES (app_settings) ===========================
+// Registre des paramètres éditables depuis l'écran admin "Paramètres".
+// Pour en ajouter un : 1) une ligne ici, 2) l'utiliser via setting()/settingNum(),
+// 3) (optionnel) une valeur initiale dans le script SQL app_settings.
+const SETTINGS_DEFS = [
+  { key:"warranty_warning_days",        cat:"Alertes",      type:"number", def:30,      min:1,  label:"Alerte garantie — anticipation (jours)", help:"Une garantie est signalée « bientôt expirée » ce nombre de jours avant son échéance." },
+  { key:"reset_default_password",       cat:"Sécurité",     type:"text",   def:"medlog",        label:"Mot de passe de réinitialisation",       help:"Mot de passe attribué quand l'admin réinitialise un compte. L'utilisateur devra le changer à la connexion." },
+  { key:"monitor_data_refresh_seconds", cat:"Mur d'écran",  type:"number", def:10,      min:3,  label:"Rafraîchissement des données (secondes)", help:"Fréquence de mise à jour des tickets sur le mur de supervision." },
+  { key:"monitor_full_reload_minutes",  cat:"Mur d'écran",  type:"number", def:5,       min:1,  label:"Rechargement complet (minutes)",          help:"Filet de sécurité : la page du mur se recharge entièrement à cet intervalle." },
+  { key:"monitor_banner_speed",         cat:"Mur d'écran",  type:"number", def:42,      min:10, label:"Vitesse du bandeau (pixels/seconde)",     help:"Vitesse de défilement des annonces sur le mur de supervision." },
+];
+function setting(key){ const d=SETTINGS_DEFS.find(s=>s.key===key)||{}; const v=state.settings?state.settings[key]:undefined; return (v==null||v==="")?d.def:v; }
+function settingNum(key){ const n=Number(setting(key)); if(!isNaN(n)) return n; const d=SETTINGS_DEFS.find(s=>s.key===key)||{}; return d.def; }
+async function fetchSettings(){
+  try{ const { data } = await sb.from("app_settings").select("key,value"); const m={}; (data||[]).forEach(r=>{ m[r.key]=r.value; }); state.settings=m; state.settingsLoaded=true; }
+  catch(_){ state.settingsLoaded=true; }
+}
 function displayName(p){ if(!p) return ""; const fl=[p.first_name,p.last_name].filter(Boolean).join(" ").trim(); return fl || p.full_name || p.email || ""; }
 function myName(){ return state.profile ? displayName(state.profile) : ""; }
 function getTicket(id){ return state.tickets.find(t=>t.id===id); }
@@ -276,7 +306,7 @@ document.addEventListener("visibilitychange", ()=>{
 
 // Vitesse de défilement constante et lente, quelle que soit la longueur de l'annonce.
 function applyBannerSpeed(){
-  const SPEED = 42; // pixels/seconde — lent et lisible
+  const SPEED = settingNum("monitor_banner_speed"); // pixels/seconde (paramétrable)
   document.querySelectorAll(".ab-track").forEach(tr=>{
     const half = tr.scrollWidth/2;            // une séquence (le contenu est doublé)
     if(half>0){ tr.style.animationDuration = Math.max(22, half/SPEED).toFixed(1)+"s"; }
@@ -312,14 +342,14 @@ function ensureMonitorTimers(){
       if(!isMonitor()){ clearInterval(monDataTimer); monDataTimer=null; return; }
       try{ await monRefresh(); }
       catch(e){ const el=document.getElementById("mon-sync"); if(el) el.textContent=" · ⚠ synchro impossible — nouvelle tentative…"; }
-    }, 10000);
+    }, settingNum("monitor_data_refresh_seconds")*1000);
   }
   if(on && !monClockTimer){
     monClockTimer = setInterval(()=>{ const c=document.getElementById("mon-clock"); if(c) c.textContent=new Date().toLocaleTimeString("fr-FR"); }, 1000);
   }
   if(on && !monReloadTimer){
     // Filet de sécurité infaillible : rechargement complet de la page toutes les 5 minutes.
-    monReloadTimer = setInterval(()=>{ if(isMonitor()) location.reload(); }, 300000);
+    monReloadTimer = setInterval(()=>{ if(isMonitor()) location.reload(); }, settingNum("monitor_full_reload_minutes")*60000);
   }
   if(!on){
     if(monDataTimer){clearInterval(monDataTimer);monDataTimer=null;}
@@ -365,7 +395,7 @@ async function loadProfile(){
 }
 async function loadData(){
   const [tk, lk, an, profs] = await Promise.all([ fetchTickets(), fetchLookups(), fetchAnnouncements(),
-    sb.from("profiles").select("id, full_name, first_name, last_name, email").eq("is_active",true).order("full_name") ]);
+    sb.from("profiles").select("id, full_name, first_name, last_name, email").eq("is_active",true).order("full_name"), fetchSettings() ]);
   state.tickets=tk; state.lookups=lk; state.announcements=an; state.profilesList=profs.data||[];
   if(!state.newService) state.newService = getServices()[0];
 }
@@ -554,7 +584,7 @@ function barList(items){ if(!items.length) return `<div class="empty-state">Aucu
 // =========================== DIRECTION (Phase 5 — tableau de bord exécutif) ===========================
 async function loadExec(){
   try{
-    const soon=new Date(); soon.setDate(soon.getDate()+30); const soonISO=soon.toISOString().slice(0,10); const todayISO=new Date().toISOString().slice(0,10);
+    const soon=new Date(); soon.setDate(soon.getDate()+settingNum("warranty_warning_days")); const soonISO=soon.toISOString().slice(0,10); const todayISO=new Date().toISOString().slice(0,10);
     const [assets, stock, prs, pos, projects] = await Promise.all([
       sb.from("assets").select("id,name,asset_tag,status,warranty_expiry,assigned_user_id"),
       sb.from("stock_items").select("id,name,quantity,min_threshold,unit").eq("is_active",true),
@@ -635,7 +665,7 @@ function renderExecAlerts(d){
   const groups=[
     { t:"Tickets en retard", items:overdue.map(x=>`${esc(x.ticket_no||"")} — ${esc(x.subject)}`), c:"#d9534f" },
     { t:"Garanties expirées", items:expired.map(a=>`${esc(a.name)} (${esc(a.asset_tag||"")})`), c:"#d9534f" },
-    { t:"Garanties < 30 jours", items:expiring.map(a=>`${esc(a.name)} — échéance ${esc(a.warranty_expiry)}`), c:"#e0a800" },
+    { t:`Garanties < ${settingNum("warranty_warning_days")} jours`, items:expiring.map(a=>`${esc(a.name)} — échéance ${esc(a.warranty_expiry)}`), c:"#e0a800" },
     { t:"Stock sous le seuil", items:low.map(s=>`${esc(s.name)} : ${esc(s.quantity)} ${esc(s.unit||"")} (min ${esc(s.min_threshold)})`), c:"#e0a800" },
     { t:"Projets en retard", items:lateProj.map(p=>`${esc(p.name)} — échéance ${esc(p.end_date)}`), c:"#d9534f" },
   ].filter(g=>g.items.length);
@@ -913,7 +943,7 @@ function renderTicketDetail(t){
     </div>`;
   }
   return `<div class="detail-header"><div><span class="ticket-id">${esc(t.ticket_no||"")}</span><h2>${esc(t.subject)}</h2>
-      <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;"><span class="badge svc">${esc(t.service)}</span>${win}<span>Demandeur : ${esc(reqName(t))}</span>${assigned}<span>Créé le ${fmtDate(t.created_at)}</span></div></div>
+      <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;"><span class="badge svc">${esc(t.service)}</span>${win}<span>Demandeur : ${esc(reqName(t))}</span>${assigned}<span>Créé le ${fmtDate(t.created_at)}</span>${t.status!=="Closed"?`<span>Délai ${esc(t.priority||"—")} : ${fmtSla(slaHours(t))}</span><span${overdue?' style="color:var(--critical);font-weight:600;"':''}>Échéance : ${fmtDate(ticketDeadline(t))}</span>`:""}</div></div>
       <div style="display:flex;gap:8px;align-items:center;"><span class="badge priority-${t.priority}">${esc(t.priority)}</span><span class="badge ${statusClass(t.status)}">${esc(t.status)}</span>${overdue?`<span class="badge overdue">⚠ En retard</span>`:""}</div></div>
     ${renderStepper(t.status)}
     ${t.status==="Reopened"?`<div class="reopen-banner">🔁 Ticket rouvert.</div>`:""}
@@ -1671,6 +1701,7 @@ function renderMaintenance(){
     <button data-action="maint-subview" data-view="services" class="${state.maintSubview==='services'?'active':''}">Services</button>
     <button data-action="maint-subview" data-view="vendors" class="${state.maintSubview==='vendors'?'active':''}">Fournisseurs</button>
     <button data-action="maint-subview" data-view="users" class="${state.maintSubview==='users'?'active':''}">Utilisateurs</button>
+    <button data-action="maint-subview" data-view="parametres" class="${state.maintSubview==='parametres'?'active':''}">Paramètres</button>
   </div>`;
   let body;
   if(state.maintSubview==="dictionnaire") body=maintDictionnaire();
@@ -1678,12 +1709,30 @@ function renderMaintenance(){
   else if(state.maintSubview==="services") body=maintServices();
   else if(state.maintSubview==="vendors") body=maintVendors();
   else if(state.maintSubview==="users") body=maintUsers();
+  else if(state.maintSubview==="parametres") body=maintParametres();
   else body=maintAnnonces();
   return `<h1 class="page-title">Maintenance</h1><p class="page-sub">Annonces, listes configurables, sites, services, fournisseurs et utilisateurs.</p>${sub}${body}`;
 }
 function maintUsers(){
   if(!state.usersLoaded){ loadUsers(); return `<div class="empty-state">Chargement des utilisateurs…</div>`; }
   return renderUsers();
+}
+function maintParametres(){
+  const cats=[...new Set(SETTINGS_DEFS.map(d=>d.cat))];
+  const blocks=cats.map(cat=>{
+    const fields=SETTINGS_DEFS.filter(d=>d.cat===cat).map(d=>{
+      const val=setting(d.key);
+      const input = d.type==="number"
+        ? `<input type="number" id="set-${d.key}" value="${esc(val)}" ${d.min!=null?`min="${d.min}"`:""} style="max-width:200px;">`
+        : `<input type="text" id="set-${d.key}" value="${esc(val)}" style="max-width:320px;">`;
+      return `<div class="field"><label for="set-${d.key}">${esc(d.label)}</label>${input}<div class="hint" style="font-size:12px;margin-top:3px;">${esc(d.help||"")}</div></div>`;
+    }).join("");
+    return `<div class="card" style="margin-bottom:16px;"><div class="section-label">${esc(cat)}</div>${fields}</div>`;
+  }).join("");
+  return `<p class="page-sub" style="margin-top:0;">Paramètres de l'application, modifiables sans toucher au code. Les changements s'appliquent à tous les utilisateurs.</p>
+    ${blocks}
+    <div id="settings-result"></div>
+    <button class="btn" data-action="save-settings">Enregistrer les paramètres</button>`;
 }
 function loadLocations(){
   sb.from("locations").select("*").order("name").then(({data})=>{ state.locations=data||[]; state.locationsLoaded=true; render(); });
@@ -1782,11 +1831,17 @@ function maintDictionnaire(){
   const typeLabel=(types.find(t=>t[0]===state.lookupType)||["",state.lookupType])[1];
   const typeBtns=types.map(([v,l])=>`<button class="btn tiny ${state.lookupType===v?'':'secondary'}" data-action="lookup-type" data-type="${v}">${l}</button>`).join(" ");
   const items=state.lookups.filter(l=>l.type===state.lookupType).sort((a,b)=>(a.sort_order||0)-(b.sort_order||0));
-  const rows=items.map(l=>`<div class="ticket-row" style="cursor:default;border-left-color:var(--brand-2);"><div class="col-main"><div class="subject">${esc(l.value)}</div></div><div class="col-status"><div class="btn-row"><button class="btn tiny danger" data-action="del-lookup" data-id="${l.id}">Supprimer</button></div></div></div>`).join("");
+  const isPrio = state.lookupType==="priority";
+  const rows=items.map(l=>{
+    const slaInfo = isPrio ? `<div class="meta" style="font-size:12px;color:var(--ink-soft);">Délai de résolution : ${l.sla_hours!=null&&l.sla_hours!==""?fmtSla(Number(l.sla_hours)):"non défini ("+fmtSla(SLA_DEFAULT_HOURS)+" par défaut)"}</div>` : "";
+    const slaCtrl = isPrio ? `<input type="number" min="1" id="sla-${l.id}" value="${l.sla_hours!=null?esc(l.sla_hours):""}" placeholder="h" title="Délai en heures" style="width:74px;"><button class="btn tiny" data-action="save-sla" data-id="${l.id}">Enregistrer</button>` : "";
+    return `<div class="ticket-row" style="cursor:default;border-left-color:var(--brand-2);"><div class="col-main"><div class="subject">${esc(l.value)}</div>${slaInfo}</div><div class="col-status"><div class="btn-row" style="align-items:center;gap:6px;">${slaCtrl}<button class="btn tiny danger" data-action="del-lookup" data-id="${l.id}">Supprimer</button></div></div></div>`;
+  }).join("");
+  const prioHint = isPrio ? `<div class="hint" style="font-size:12px;">Pour chaque priorité, définissez le <strong>délai de résolution en heures</strong>. Au-delà, un ticket non clôturé est signalé « en retard ». Ex. : Critical 4 h, High 24 h, Medium 72 h, Low 120 h.</div>` : "";
   return `<div class="card" style="margin-bottom:16px;"><div class="section-label">Liste à gérer</div><div class="btn-row" style="flex-wrap:wrap;">${typeBtns}</div>
       <div class="hint">Les statuts du workflow (Pending → In Progress → Testing → Closed / Reopened) restent fixes. Standardiser ces listes fiabilise les statistiques du tableau de bord.</div></div>
     <div class="card" style="margin-bottom:20px;"><div class="section-label">Ajouter une valeur</div><div class="btn-row"><input type="text" id="lk-value" placeholder="Nouvelle valeur" style="max-width:380px;"><button class="btn" data-action="create-lookup">Ajouter</button></div><div id="lk-error"></div></div>
-    <div class="section-label">Valeurs — ${esc(typeLabel)}</div>${items.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucune valeur.</div>`}`;
+    <div class="section-label">Valeurs — ${esc(typeLabel)}</div>${prioHint}${items.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucune valeur.</div>`}`;
 }
 
 // =========================== MONITORING (mur d'écran) ===========================
@@ -1950,7 +2005,7 @@ async function onAction(e){
   if(action==="reset-password"){
     const id=el.dataset.id; const name=el.dataset.name||"cet utilisateur";
     const box=document.getElementById("pwreset-"+id);
-    const DEFAULT_RESET_PWD="medlog"; // mot de passe par défaut après réinitialisation
+    const DEFAULT_RESET_PWD=setting("reset_default_password")||"medlog";
     if(!confirm(`Réinitialiser le mot de passe de ${name} à « ${DEFAULT_RESET_PWD} » ?`)) return;
     if(box) box.innerHTML=`<div class="hint" style="font-size:12px;">Réinitialisation…</div>`;
     try{
@@ -1960,6 +2015,19 @@ async function onAction(e){
       try{ await sb.from("profiles").update({ must_change_password:true }).eq("id", id); }catch(_){}
       if(box) box.innerHTML=`<div class="ok-msg" style="margin-top:10px;">Mot de passe de <strong>${esc(name)}</strong> réinitialisé à <span style="font-family:var(--mono);font-size:13px;">${esc(data.password||DEFAULT_RESET_PWD)}</span>. La personne devra définir son propre mot de passe à sa prochaine connexion.</div>`;
     }catch(err){ if(box) box.innerHTML=`<div class="error-msg" style="margin-top:10px;">Échec : ${esc(err.message||String(err))}.<br>Vérifiez que la fonction « admin-reset-password » est déployée.</div>`; }
+    return;
+  }
+  if(action==="save-settings"){
+    const box=document.getElementById("settings-result");
+    const rows=SETTINGS_DEFS.map(d=>{ const el=document.getElementById("set-"+d.key); let v=el?el.value:String(d.def); if(d.type==="number"){ const n=Number(v); if(isNaN(n)||(d.min!=null&&n<d.min)){ v=String(d.def);} } return { key:d.key, value:String(v), updated_at:new Date().toISOString(), updated_by:uid() }; });
+    box.innerHTML=""; busy("Enregistrement des paramètres…");
+    try{
+      const { error } = await sb.from("app_settings").upsert(rows, { onConflict:"key" });
+      if(error) throw error;
+      await fetchSettings();
+      unbusy(); render();
+      const b2=document.getElementById("settings-result"); if(b2) b2.innerHTML=`<div class="ok-msg">Paramètres enregistrés. Les réglages du mur d'écran s'appliquent au prochain rechargement de celui-ci.</div>`;
+    }catch(err){ unbusy(); const b2=document.getElementById("settings-result"); if(b2) b2.innerHTML=`<div class="error-msg">Échec : ${esc(err.message||String(err))}.<br>Vérifiez que la table « app_settings » est créée.</div>`; }
     return;
   }
   if(action==="logout"){ if(monDataTimer){clearInterval(monDataTimer);monDataTimer=null;} if(monClockTimer){clearInterval(monClockTimer);monClockTimer=null;} await sb.auth.signOut(); state.session=null; state.profile=null; state.view="dashboard"; render(); return; }
@@ -2386,6 +2454,14 @@ async function onAction(e){
     const { error } = await sb.from("lookups").insert({ type:state.lookupType, value, label:value, sort_order:sort, is_active:true });
     if(error){ errBox.innerHTML=`<div class="error-msg">${esc(error.message)}</div>`; unbusy(); return; }
     state.lookups=await fetchLookups(); render(); return;
+  }
+  if(action==="save-sla"){
+    const id=el.dataset.id; const el2=document.getElementById("sla-"+id); const h=parseInt(el2?el2.value:"",10);
+    if(!h||h<1){ alert("Saisissez un nombre d'heures valide (au moins 1)."); return; }
+    busy("Enregistrement du délai…");
+    try{ await sb.from("lookups").update({ sla_hours:h }).eq("id",id); state.lookups=await fetchLookups(); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
   }
   if(action==="del-lookup"){ if(!confirm("Supprimer cette valeur ?")) return; busy("…"); await sb.from("lookups").delete().eq("id",el.dataset.id); state.lookups=await fetchLookups(); render(); return; }
 
