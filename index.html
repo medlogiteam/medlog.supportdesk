@@ -903,9 +903,20 @@ function renderUsers(){
         <div class="field" style="margin-bottom:0;display:flex;align-items:flex-end;"><button class="btn tiny" data-action="save-name" data-id="${u.id}">Enregistrer le nom</button></div>
       </div></div>`;
   }).join("")}</div>`;
-  return `<p class="page-sub" style="margin-top:0;">Renseignez le <strong>prénom et le nom</strong> de chaque compte (affichés partout à la place de l'email) et attribuez les rôles. La <strong>création</strong> de comptes se fait dans Supabase (Authentication → Add user).</p>
-    <div class="card" style="margin-bottom:18px;"><div class="section-label">Créer un compte</div>
-      <div class="hint" style="font-size:13px;color:var(--ink-soft);">Dans le tableau de bord Supabase → <strong>Authentication → Users → Add user</strong> (cochez « Auto Confirm »). Le profil apparaît ici automatiquement ; attribuez-lui ensuite son rôle ci-dessous.</div>
+  const roleKeywords=(state.roles||[]).map(r=>r.name).join(", ");
+  return `<p class="page-sub" style="margin-top:0;">Renseignez le <strong>prénom et le nom</strong> de chaque compte (affichés partout à la place de l'email) et attribuez les rôles.</p>
+    <div class="card" style="margin-bottom:18px;"><div class="section-label">Importer des comptes en masse</div>
+      <div class="hint" style="font-size:13px;">Une ligne par utilisateur : <strong>email, prénom, nom, rôle</strong>. Le rôle est optionnel (« user » par défaut). Séparateur : virgule ou point-virgule.<br>Rôles possibles : <span style="font-family:var(--mono);font-size:12px;">${esc(roleKeywords||"user, technician, …")}</span></div>
+      <textarea id="bulk-users" rows="6" placeholder="jean.dupont@medlog.com, Jean, Dupont, technician
+marie.kana@medlog.com, Marie, Kana, store_keeper"></textarea>
+      <div class="field" style="max-width:320px;"><label for="bulk-pwd">Mot de passe initial commun (optionnel)</label><input type="text" id="bulk-pwd" placeholder="vide = un mot de passe généré par compte"></div>
+      <div id="bulk-error"></div>
+      <button class="btn" data-action="bulk-import-users">Importer les comptes</button>
+      <div class="hint" style="font-size:12px;margin-top:8px;">La création utilise une fonction sécurisée réservée aux administrateurs. Les mots de passe initiaux s'affichent une seule fois après l'import : copiez-les pour les transmettre.</div>
+      <div id="bulk-results" style="margin-top:12px;"></div>
+    </div>
+    <div class="card" style="margin-bottom:18px;"><div class="section-label">Créer un compte (à l'unité)</div>
+      <div class="hint" style="font-size:13px;color:var(--ink-soft);">Vous pouvez aussi créer un compte unique dans Supabase → <strong>Authentication → Add user</strong> (cochez « Auto Confirm ») ; le profil apparaît ensuite ci-dessous.</div>
     </div>
     <div class="section-label">Comptes existants</div>${list}`;
 }
@@ -2340,6 +2351,34 @@ async function onAction(e){
     busy("…");
     try{ await sb.from("profiles").update({ first_name, last_name, full_name }).eq("id",id); await loadUsers(); }
     catch(err){ alert(err.message||String(err)); unbusy(); } return;
+  }
+  if(action==="bulk-import-users"){
+    const ta=document.getElementById("bulk-users"); const box=document.getElementById("bulk-error"); const out=document.getElementById("bulk-results");
+    const lines=(ta.value||"").split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+    if(!lines.length){ box.innerHTML=`<div class="error-msg">Collez au moins une ligne.</div>`; return; }
+    const users=lines.map(l=>{ const p=l.split(/[;,]/).map(x=>x.trim()); return { email:(p[0]||"").toLowerCase(), first_name:p[1]||"", last_name:p[2]||"", role:p[3]||"user" }; });
+    const bad=users.filter(u=>!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(u.email));
+    if(bad.length){ box.innerHTML=`<div class="error-msg">${bad.length} ligne(s) sans e-mail valide. Format attendu : email, prénom, nom, rôle.</div>`; return; }
+    const default_password=(document.getElementById("bulk-pwd").value||"").trim()||null;
+    box.innerHTML=""; busy(`Création de ${users.length} compte(s)…`);
+    try{
+      const { data, error } = await sb.functions.invoke("admin-bulk-users", { body:{ users, default_password } });
+      if(error){ let d=""; try{ const b=await error.context.json(); d=[b.error,b.detail].filter(Boolean).join(" — "); }catch(_){} throw new Error(d||error.message); }
+      if(data && data.error) throw new Error(data.error);
+      const res=(data&&data.results)||[];
+      const th=(t)=>`<th style="text-align:left;padding:6px 8px;border-bottom:2px solid var(--border);font-size:11px;color:var(--ink-soft);">${t}</th>`;
+      const rowsHtml=res.map(r=>{
+        const badge=r.status==='créé'?'<span class="badge closed">créé</span>':(r.status==='erreur'?'<span class="badge reopened">erreur</span>':`<span class="badge pending">${esc(r.status)}</span>`);
+        return `<tr><td style="padding:6px 8px;border-bottom:1px solid var(--border);font-size:12.5px;">${esc(r.email)}</td><td style="padding:6px 8px;border-bottom:1px solid var(--border);">${badge}</td><td style="padding:6px 8px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:12px;">${esc(r.password||'')}</td><td style="padding:6px 8px;border-bottom:1px solid var(--border);font-size:12px;color:var(--ink-soft);">${esc(r.detail||r.role||'')}</td></tr>`;
+      }).join("");
+      const ok=res.filter(r=>r.status==='créé').length;
+      out.innerHTML=`<div class="section-label">Résultat : ${ok}/${res.length} créé(s)</div>
+        <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;"><table style="border-collapse:collapse;width:100%;"><tr>${th("Email")}${th("Statut")}${th("Mot de passe initial")}${th("Détail")}</tr>${rowsHtml}</table></div>
+        <div class="hint" style="font-size:12px;margin-top:6px;">⚠️ Copiez ces mots de passe maintenant : ils ne seront plus affichés. Transmettez-les aux personnes concernées.</div>`;
+      ta.value="";
+      await loadUsers();
+    }catch(err){ box.innerHTML=`<div class="error-msg">Import impossible : ${esc(err.message||String(err))}.<br>Vérifiez que la fonction « admin-bulk-users » est déployée.</div>`; unbusy(); }
+    return;
   }
 }
 async function loadActivity(id){
