@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MEDLOG IT Ops — Support Desk</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0B3D62">
+<link rel="apple-touch-icon" href="icon-192.png">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
@@ -205,7 +208,8 @@ let state = {
   poReceipts:[], receivedByItem:{}, poReceiving:false,
   projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[],
   execLoaded:false, execData:null,
-  reportSource:"tickets", reportFilters:{}, reportRows:null, reportRunning:false, reportError:null
+  reportSource:"tickets", reportFilters:{}, reportRows:null, reportRunning:false, reportError:null,
+  canInstall:false
 };
 
 // --- Utilitaires ---
@@ -409,7 +413,8 @@ function renderHeader(){
     }).join("")}</div>`;
     session=`<div class="session-info"><span class="role-chip">${ROLE_LABEL[r]||r}</span>${esc(myName())}<button class="link" data-action="logout">déconnexion</button></div>`;
   }
-  return `<header class="topbar"><div class="brand"><div class="mark">ML</div><div><div class="name">MEDLOG IT Ops</div><div class="sub">${isMonitor()?"Monitoring":"Support Desk"}</div></div></div>${nav}${session}</header>`;
+  const installBtn = state.canInstall ? `<button class="no-print" data-action="install-app" title="Installer l'application sur ce poste" style="border:1px solid rgba(255,255,255,.55);border-radius:6px;padding:5px 11px;color:#fff;background:transparent;cursor:pointer;font-size:13px;white-space:nowrap;">⬇ Installer l'app</button>` : "";
+  return `<header class="topbar"><div class="brand"><div class="mark">ML</div><div><div class="name">MEDLOG IT Ops</div><div class="sub">${isMonitor()?"Monitoring":"Support Desk"}</div></div></div>${nav}<div class="topbar-right" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">${installBtn}${session}</div></header>`;
 }
 function navGroups(){
   const r=roleName();
@@ -1858,6 +1863,12 @@ async function onAction(e){
   if(action==="fullscreen"){ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(e){} return; }
   if(action==="print-report"){ window.print(); return; }
   if(action==="export-medlogix"){ exportMedlogixCSV(); return; }
+  if(action==="install-app"){
+    if(!deferredInstallPrompt){ alert("L'installation se fait via le navigateur : sur Chrome ou Edge, cliquez sur l'icône d'installation (un écran avec une flèche) à droite de la barre d'adresse, ou ouvrez le menu ⋮ puis « Installer MEDLOG IT Ops »."); return; }
+    deferredInstallPrompt.prompt();
+    try{ await deferredInstallPrompt.userChoice; }catch(_){}
+    deferredInstallPrompt=null; state.canInstall=false; render(); return;
+  }
   if(action==="logout"){ if(monDataTimer){clearInterval(monDataTimer);monDataTimer=null;} if(monClockTimer){clearInterval(monClockTimer);monClockTimer=null;} await sb.auth.signOut(); state.session=null; state.profile=null; state.view="dashboard"; render(); return; }
   if(action==="retry"){ state.booting=true; render(); await afterLogin(); return; }
   if(action==="goto-new"){ state.view="tickets"; state.selectedTicketId=null; state.staffNew=true; if(!state.newService) state.newService=getServices()[0]; render(); return; }
@@ -2388,6 +2399,15 @@ async function loadActivity(id){
 }
 
 // --- Go ---
+// ---- PWA : installation sur le bureau (barre des tâches) ----
+let deferredInstallPrompt = null;
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", ()=>{ navigator.serviceWorker.register("sw.js").catch(()=>{}); });
+}
+function _isStandalone(){ return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true; }
+window.addEventListener("beforeinstallprompt", (e)=>{ e.preventDefault(); deferredInstallPrompt = e; if(!_isStandalone()){ state.canInstall = true; render(); } });
+window.addEventListener("appinstalled", ()=>{ deferredInstallPrompt = null; state.canInstall = false; render(); });
+
 init();
 </script>
 </body>
