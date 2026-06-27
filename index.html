@@ -387,10 +387,13 @@ async function reloadTickets(){ state.tickets = await fetchTickets(); }
 
 // =========================== RENDER ROOT ===========================
 function renderApp(){
+  if(state.session && state.profile && state.profile.must_change_password && !state.booting && !state.loadError){
+    return `${renderHeader()}<main>${renderForcedPasswordChange()}</main>`;
+  }
   if(state.profile && isMonitor() && !state.booting && !state.loadError){
     return `${renderHeader()}<div class="monitor-wrap">${renderMain()}</div>`;
   }
-  return `${renderHeader()}<main>${renderMain()}</main><footer class="app-footer">MEDLOG IT Ops — Phase 1 (Supabase)</footer>`;
+  return `${renderHeader()}<main>${renderMain()}</main><footer class="app-footer">MEDLOG IT Ops v1.0 · © ${new Date().getFullYear()}</footer>`;
 }
 function renderHeader(){
   let nav="", session="";
@@ -405,6 +408,9 @@ function renderHeader(){
       <button class="link" data-action="logout">quitter</button></div>`;
   } else if(state.profile){
     const r=roleName();
+    if(state.profile.must_change_password){
+      session=`<div class="session-info"><span class="role-chip">${ROLE_LABEL[r]||r}</span>${esc(myName())}<button class="link" data-action="logout">déconnexion</button></div>`;
+    } else {
     const groups=navGroups();
     const active=g=>g.leaves.some(lf=>lf.v===state.view);
     nav=`<div class="topnav">${groups.map(g=>{
@@ -412,6 +418,7 @@ function renderHeader(){
       return `<button data-action="nav" data-view="${first.v}" class="${active(g)?'active':''}">${g.label}</button>`;
     }).join("")}</div>`;
     session=`<div class="session-info"><span class="role-chip">${ROLE_LABEL[r]||r}</span>${esc(myName())}<button class="link" data-action="nav" data-view="account">mon compte</button><button class="link" data-action="logout">déconnexion</button></div>`;
+    }
   }
   const installBtn = state.canInstall ? `<button class="no-print" data-action="install-app" title="Installer l'application sur ce poste" style="border:1px solid rgba(255,255,255,.55);border-radius:6px;padding:5px 11px;color:#fff;background:transparent;cursor:pointer;font-size:13px;white-space:nowrap;">⬇ Installer l'app</button>` : "";
   return `<header class="topbar"><div class="brand"><div class="mark">ML</div><div><div class="name">MEDLOG IT Ops</div><div class="sub">${isMonitor()?"Monitoring":"Support Desk"}</div></div></div>${nav}<div class="topbar-right" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">${installBtn}${session}</div></header>`;
@@ -459,6 +466,17 @@ function renderMain(){
 }
 
 // =========================== MON COMPTE ===========================
+function renderForcedPasswordChange(){
+  return `<div class="gate"><h1>Changement de mot de passe requis</h1>
+    <p>Pour votre sécurité, vous devez définir un mot de passe personnel avant d'accéder à l'application.</p>
+    <div class="card">
+      <div class="field"><label for="fpw-new">Nouveau mot de passe</label><input type="password" id="fpw-new" placeholder="au moins 8 caractères" autocomplete="new-password"></div>
+      <div class="field"><label for="fpw-confirm">Confirmer le mot de passe</label><input type="password" id="fpw-confirm" autocomplete="new-password"></div>
+      <div id="fpw-result"></div>
+      <button class="btn" data-action="force-change-password" style="margin-top:6px;">Définir mon mot de passe</button>
+      <div style="margin-top:10px;"><button class="link" data-action="logout">se déconnecter</button></div>
+    </div></div>`;
+}
 function renderAccount(){
   const email=(state.profile&&state.profile.email)||(state.session&&state.session.user&&state.session.user.email)||"";
   const r=roleName();
@@ -920,13 +938,15 @@ function renderUsers(){
         <div class="col-status" style="align-items:flex-end;gap:6px;"><div class="btn-row">
           <select data-action="change-role" data-id="${u.id}" style="font-size:12px;padding:5px 8px;">${roleOpts}</select>
           <button class="btn tiny secondary" data-action="toggle-active" data-id="${u.id}" data-active="${active?'0':'1'}">${active?'Désactiver':'Activer'}</button>
+          <button class="btn tiny secondary" data-action="reset-password" data-id="${u.id}" data-name="${esc(displayName(u)||u.email)}">Réinitialiser MDP</button>
         </div></div>
       </div>
       <div class="field-row" style="margin-top:10px;">
         <div class="field" style="margin-bottom:0;"><label>Prénom</label><input type="text" id="fn-${u.id}" value="${esc(u.first_name||'')}" placeholder="Prénom"></div>
         <div class="field" style="margin-bottom:0;"><label>Nom</label><input type="text" id="ln-${u.id}" value="${esc(u.last_name||'')}" placeholder="Nom"></div>
         <div class="field" style="margin-bottom:0;display:flex;align-items:flex-end;"><button class="btn tiny" data-action="save-name" data-id="${u.id}">Enregistrer le nom</button></div>
-      </div></div>`;
+      </div>
+      <div id="pwreset-${u.id}"></div></div>`;
   }).join("")}</div>`;
   const roleKeywords=(state.roles||[]).map(r=>r.name).join(", ");
   return `<p class="page-sub" style="margin-top:0;">Renseignez le <strong>prénom et le nom</strong> de chaque compte (affichés partout à la place de l'email) et attribuez les rôles.</p>
@@ -1889,6 +1909,22 @@ async function onAction(e){
     try{ await deferredInstallPrompt.userChoice; }catch(_){}
     deferredInstallPrompt=null; state.canInstall=false; render(); return;
   }
+  if(action==="force-change-password"){
+    const n1=(document.getElementById("fpw-new").value||"");
+    const n2=(document.getElementById("fpw-confirm").value||"");
+    const box=document.getElementById("fpw-result");
+    if(n1.length<8){ box.innerHTML=`<div class="error-msg">Le mot de passe doit comporter au moins 8 caractères.</div>`; return; }
+    if(n1!==n2){ box.innerHTML=`<div class="error-msg">Les deux mots de passe ne correspondent pas.</div>`; return; }
+    box.innerHTML=""; busy("Enregistrement…");
+    try{
+      const { error: uErr } = await sb.auth.updateUser({ password: n1 });
+      if(uErr) throw uErr;
+      try{ await sb.rpc("mark_password_changed"); }catch(_){}
+      if(state.profile) state.profile.must_change_password=false;
+      unbusy(); render();
+    }catch(err){ unbusy(); box.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
   if(action==="change-password"){
     const cur=(document.getElementById("pw-current").value||"");
     const n1=(document.getElementById("pw-new").value||"");
@@ -1909,6 +1945,21 @@ async function onAction(e){
       box.innerHTML=`<div class="ok-msg">Mot de passe mis à jour avec succès.</div>`;
       ["pw-current","pw-new","pw-confirm"].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=""; });
     }catch(err){ unbusy(); box.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
+  if(action==="reset-password"){
+    const id=el.dataset.id; const name=el.dataset.name||"cet utilisateur";
+    const box=document.getElementById("pwreset-"+id);
+    const DEFAULT_RESET_PWD="medlog"; // mot de passe par défaut après réinitialisation
+    if(!confirm(`Réinitialiser le mot de passe de ${name} à « ${DEFAULT_RESET_PWD} » ?`)) return;
+    if(box) box.innerHTML=`<div class="hint" style="font-size:12px;">Réinitialisation…</div>`;
+    try{
+      const { data, error } = await sb.functions.invoke("admin-reset-password", { body:{ user_id:id, password:DEFAULT_RESET_PWD } });
+      if(error){ let d=""; try{ const b=await error.context.json(); d=[b.error,b.detail].filter(Boolean).join(" — "); }catch(_){} throw new Error(d||error.message); }
+      if(data && data.error) throw new Error(data.error);
+      try{ await sb.from("profiles").update({ must_change_password:true }).eq("id", id); }catch(_){}
+      if(box) box.innerHTML=`<div class="ok-msg" style="margin-top:10px;">Mot de passe de <strong>${esc(name)}</strong> réinitialisé à <span style="font-family:var(--mono);font-size:13px;">${esc(data.password||DEFAULT_RESET_PWD)}</span>. La personne devra définir son propre mot de passe à sa prochaine connexion.</div>`;
+    }catch(err){ if(box) box.innerHTML=`<div class="error-msg" style="margin-top:10px;">Échec : ${esc(err.message||String(err))}.<br>Vérifiez que la fonction « admin-reset-password » est déployée.</div>`; }
     return;
   }
   if(action==="logout"){ if(monDataTimer){clearInterval(monDataTimer);monDataTimer=null;} if(monClockTimer){clearInterval(monClockTimer);monClockTimer=null;} await sb.auth.signOut(); state.session=null; state.profile=null; state.view="dashboard"; render(); return; }
@@ -2425,6 +2476,7 @@ async function onAction(e){
         return `<tr><td style="padding:6px 8px;border-bottom:1px solid var(--border);font-size:12.5px;">${esc(r.email)}</td><td style="padding:6px 8px;border-bottom:1px solid var(--border);">${badge}</td><td style="padding:6px 8px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:12px;">${esc(r.password||'')}</td><td style="padding:6px 8px;border-bottom:1px solid var(--border);font-size:12px;color:var(--ink-soft);">${esc(r.detail||r.role||'')}</td></tr>`;
       }).join("");
       const ok=res.filter(r=>r.status==='créé').length;
+      try{ const created=res.filter(r=>r.status==='créé').map(r=>r.email); if(created.length) await sb.from("profiles").update({ must_change_password:true }).in("email", created); }catch(_){}
       out.innerHTML=`<div class="section-label">Résultat : ${ok}/${res.length} créé(s)</div>
         <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;"><table style="border-collapse:collapse;width:100%;"><tr>${th("Email")}${th("Statut")}${th("Mot de passe initial")}${th("Détail")}</tr>${rowsHtml}</table></div>
         <div class="hint" style="font-size:12px;margin-top:6px;">⚠️ Copiez ces mots de passe maintenant : ils ne seront plus affichés. Transmettez-les aux personnes concernées.</div>`;
