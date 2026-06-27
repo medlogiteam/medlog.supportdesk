@@ -390,7 +390,7 @@ function renderApp(){
   if(state.profile && isMonitor() && !state.booting && !state.loadError){
     return `${renderHeader()}<div class="monitor-wrap">${renderMain()}</div>`;
   }
-  return `${renderHeader()}<main>${renderMain()}</main><footer class="app-footer">MEDLOG IT Ops — Phase 1 (Supabase)</footer>`;
+  return `${renderHeader()}<main>${renderMain()}</main><footer class="app-footer">MEDLOG IT Ops</footer>`;
 }
 function renderHeader(){
   let nav="", session="";
