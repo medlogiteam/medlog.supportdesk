@@ -236,17 +236,31 @@ function priorityRank(p){ return {"Critical":0,"High":1,"Medium":2,"Low":3}[p] ?
 function statusRank(s){ return {"Reopened":0,"Pending":1,"In Progress":2,"Testing":3,"Closed":4}[s] ?? 5; }
 function roleName(){ return state.profile && state.profile.role ? state.profile.role.name : (state.profile?state.profile.role_name:null); }
 function isAdmin(){ return roleName()==="admin"; }
-function isStaff(){ return ["admin","it_manager","technician"].includes(roleName()); }
-function canViewAssets(){ return ["admin","it_manager","technician","asset_manager"].includes(roleName()); }
-function canEditAssets(){ return ["admin","asset_manager"].includes(roleName()); }
-function canViewStock(){ return ["admin","it_manager","asset_manager","store_keeper"].includes(roleName()); }
-function canMoveStock(){ return ["admin","asset_manager","store_keeper"].includes(roleName()); }
-function canViewProcurement(){ return ["admin","it_manager","buyer"].includes(roleName()); }
-function canCreatePr(){ return ["admin","it_manager","buyer"].includes(roleName()); }
-function canViewProjects(){ return ["admin","it_manager","project_manager"].includes(roleName()); }
-function canManageProjects(){ return ["admin","project_manager"].includes(roleName()); }
-function canViewExec(){ return ["admin","it_manager"].includes(roleName()); }
-function canCreate(){ return roleName() && roleName()!=="viewer"; }
+function myGroupId(){ return state.profile ? state.profile.group_id : null; }
+// Lecture de la grille groupe × écran × action. L'admin a toujours accès complet.
+function can(screen, act){
+  if(isAdmin()) return true;
+  const gid=myGroupId(); if(!gid) return false;
+  const p=state.groupPerms.find(x=>x.group_id===gid && x.screen===screen);
+  if(!p) return false;
+  return act==="view"?!!p.can_view : act==="create"?!!p.can_create : act==="edit"?!!p.can_edit : act==="delete"?!!p.can_delete : false;
+}
+function canWrite(screen){ return can(screen,"create")||can(screen,"edit")||can(screen,"delete"); }
+// Le droit de "modifier" les tickets = équipe support (voit tous les tickets, peut affecter/changer le statut).
+function isStaff(){ return isAdmin() || can("tickets","edit"); }
+function canViewAssets(){ return can("assets","view"); }
+function canEditAssets(){ return canWrite("assets"); }
+function canViewStock(){ return can("stock","view"); }
+function canMoveStock(){ return canWrite("stock"); }
+function canViewProcurement(){ return can("procurement","view"); }
+function canCreatePr(){ return can("procurement","create"); }
+function canViewProjects(){ return can("projects","view"); }
+function canManageProjects(){ return canWrite("projects"); }
+function canViewExec(){ return can("exec","view"); }
+function canViewReports(){ return can("reports","view"); }
+function canViewDashboard(){ return isAdmin() || can("dashboard","view"); }
+function canViewTickets(){ return isAdmin() || can("tickets","view"); }
+function canCreate(){ return isAdmin() || can("tickets","create"); }
 function uid(){ return state.session ? state.session.user.id : null; }
 
 // =========================== PARAMÈTRES (app_settings) ===========================
@@ -401,6 +415,11 @@ async function afterLogin(){
   }catch(e){ state.loadError = e.message||String(e); }
   state.booting=false;
   state.view = isMonitor() ? "monitor" : "dashboard";
+  // Écran d'accueil : pour un non-admin, le premier écran autorisé par son groupe.
+  if(state.profile && !isMonitor() && !isAdmin()){
+    const ng=navGroups(); const allowed=ng.flatMap(g=>g.leaves.filter(lf=>lf.show()).map(lf=>lf.v));
+    if(allowed.length && !allowed.includes(state.view)) state.view=allowed[0];
+  }
   // Lien profond : ?ticket=INC... ouvre directement le ticket concerné.
   const tkParam = isMonitor() ? null : new URLSearchParams(location.search).get("ticket");
   if(tkParam && !state.loadError){
@@ -483,10 +502,10 @@ function navGroups(){
   const r=roleName();
   return [
     { key:"board", label:"Tableau de bord", leaves:[
-        {v:"dashboard", l:"Opérationnel", show:()=>true},
+        {v:"dashboard", l:"Opérationnel", show:()=>canViewDashboard()},
         {v:"exec", l:"Direction", show:()=>canViewExec()},
-        {v:"reports", l:"Rapports", show:()=>canViewExec()} ] },
-    { key:"tickets", label:(r==="user"?"Mes tickets":"Tickets"), leaves:[ {v:"tickets", l:"Tickets", show:()=>true} ] },
+        {v:"reports", l:"Rapports", show:()=>canViewReports()} ] },
+    { key:"tickets", label:(r==="user"?"Mes tickets":"Tickets"), leaves:[ {v:"tickets", l:"Tickets", show:()=>canViewTickets()} ] },
     { key:"resources", label:"Ressources", leaves:[
         {v:"assets", l:"Actifs", show:()=>canViewAssets()},
         {v:"stock", l:"Stock", show:()=>canViewStock()},
@@ -507,17 +526,24 @@ function renderMain(){
   if(!state.session || !state.profile) return renderLogin();
   if(state.loadError) return `<div class="gate"><h1>Erreur de chargement</h1><div class="card"><div class="error-msg">${esc(state.loadError)}</div><button class="btn" data-action="retry" style="margin-top:12px;">Réessayer</button></div></div>`;
   if(isMonitor()) return state.view==="report" ? renderReport() : state.view==="announces" ? renderMonitorAnnonces() : renderMonitor();
+  // Étape 2 — accès piloté par les groupes (l'admin a toujours accès complet).
+  const navg=navGroups();
+  const allowed=navg.flatMap(g=>g.leaves.filter(lf=>lf.show()).map(lf=>lf.v));
+  if(!isAdmin() && allowed.length===0){
+    return `<div class="gate"><h1>Accès non configuré</h1><div class="card"><p>Votre compte n'a pas encore de groupe d'accès, ou ce groupe n'autorise aucun écran.</p><p style="color:var(--ink-soft);">Contactez votre administrateur.</p></div></div>`;
+  }
+  if(state.view!=="account" && !allowed.includes(state.view)) state.view = allowed[0];
   const sub=sectionSubnav();
   if(state.view==="account") return renderAccount();
-  if(state.view==="dashboard") return sub+renderDashboard();
-  if(state.view==="exec") return canViewExec()?sub+renderExec():renderDashboard();
-  if(state.view==="reports") return canViewExec()?sub+renderReports():renderDashboard();
-  if(state.view==="tickets") return renderTicketsArea();
-  if(state.view==="assets") return canViewAssets()?sub+renderAssetsArea():renderDashboard();
-  if(state.view==="stock") return canViewStock()?sub+renderStockArea():renderDashboard();
-  if(state.view==="procurement") return canViewProcurement()?sub+renderProcurementArea():renderDashboard();
-  if(state.view==="projects") return canViewProjects()?renderProjectsArea():renderDashboard();
-  if(state.view==="maintenance") return isAdmin()?renderMaintenance():renderDashboard();
+  if(state.view==="dashboard") return canViewDashboard()?sub+renderDashboard():"";
+  if(state.view==="exec") return canViewExec()?sub+renderExec():"";
+  if(state.view==="reports") return canViewReports()?sub+renderReports():"";
+  if(state.view==="tickets") return canViewTickets()?renderTicketsArea():"";
+  if(state.view==="assets") return canViewAssets()?sub+renderAssetsArea():"";
+  if(state.view==="stock") return canViewStock()?sub+renderStockArea():"";
+  if(state.view==="procurement") return canViewProcurement()?sub+renderProcurementArea():"";
+  if(state.view==="projects") return canViewProjects()?renderProjectsArea():"";
+  if(state.view==="maintenance") return isAdmin()?renderMaintenance():"";
   return "";
 }
 
@@ -987,13 +1013,17 @@ function renderUsers(){
   else if(!state.adminUsers.length) list=`<div class="empty-state">Aucun utilisateur.</div>`;
   else list=`<div class="ticket-list">${state.adminUsers.map(u=>{
     const active=u.is_active!==false;
-    const roleOpts=state.roles.map(r=>`<option value="${r.id}" ${u.role_id===r.id?'selected':''}>${ROLE_LABEL[r.name]||r.name}</option>`).join("");
+    const adminRole=(state.roles||[]).find(r=>r.name==="admin");
+    const userRole=(state.roles||[]).find(r=>r.name==="user");
+    const isRowAdmin=adminRole && u.role_id===adminRole.id;
+    const accessOpts=`<option value="${userRole?userRole.id:''}" ${!isRowAdmin?'selected':''}>Utilisateur (accès par groupe)</option><option value="${adminRole?adminRole.id:''}" ${isRowAdmin?'selected':''}>Administrateur (accès total)</option>`;
+    const groupOpts=`<option value="">— groupe —</option>`+(state.groups||[]).map(g=>`<option value="${g.id}" ${u.group_id===g.id?'selected':''}>${esc(g.name)}</option>`).join("");
     return `<div class="ticket-row" style="cursor:default;border-left-color:${active?'var(--brand-2)':'var(--critical)'};display:block;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
         <div class="col-main"><div class="subject">${esc(displayName(u))||"(sans nom)"} ${active?"":'<span class="badge priority-Critical">Désactivé</span>'}</div><div class="meta"><span class="ticket-id">${esc(u.email)}</span></div></div>
         <div class="col-status" style="align-items:flex-end;gap:6px;"><div class="btn-row">
-          <select data-action="change-role" data-id="${u.id}" style="font-size:12px;padding:5px 8px;">${roleOpts}</select>
-          <select data-action="change-group" data-id="${u.id}" style="font-size:12px;padding:5px 8px;" title="Groupe">${`<option value="">— groupe —</option>`+(state.groups||[]).map(g=>`<option value="${g.id}" ${u.group_id===g.id?'selected':''}>${esc(g.name)}</option>`).join("")}</select>
+          <select data-action="change-role" data-id="${u.id}" style="font-size:12px;padding:5px 8px;">${accessOpts}</select>
+          <select data-action="change-group" data-id="${u.id}" style="font-size:12px;padding:5px 8px;" title="Groupe d'accès" ${isRowAdmin?'disabled title="Administrateur : accès total, groupe sans effet"':''}>${groupOpts}</select>
           <button class="btn tiny secondary" data-action="toggle-active" data-id="${u.id}" data-active="${active?'0':'1'}">${active?'Désactiver':'Activer'}</button>
           <button class="btn tiny secondary" data-action="reset-password" data-id="${u.id}" data-name="${esc(displayName(u)||u.email)}">Réinitialiser MDP</button>
         </div></div>
@@ -1005,12 +1035,11 @@ function renderUsers(){
       </div>
       <div id="pwreset-${u.id}"></div></div>`;
   }).join("")}</div>`;
-  const roleKeywords=(state.roles||[]).map(r=>r.name).join(", ");
-  return `<p class="page-sub" style="margin-top:0;">Renseignez le <strong>prénom et le nom</strong> de chaque compte (affichés partout à la place de l'email) et attribuez les rôles.</p>
+  return `<p class="page-sub" style="margin-top:0;">Renseignez le <strong>prénom et le nom</strong> de chaque compte (affichés partout à la place de l'email), définissez le type d'accès (Utilisateur / Administrateur) et attribuez un <strong>groupe</strong>.</p>
     <div class="card" style="margin-bottom:18px;"><div class="section-label">Importer des comptes en masse</div>
-      <div class="hint" style="font-size:13px;">Une ligne par utilisateur : <strong>email, prénom, nom, rôle</strong>. Le rôle est optionnel (« user » par défaut). Séparateur : virgule ou point-virgule.<br>Rôles possibles : <span style="font-family:var(--mono);font-size:12px;">${esc(roleKeywords||"user, technician, …")}</span></div>
-      <textarea id="bulk-users" rows="6" placeholder="jean.dupont@medlog.com, Jean, Dupont, technician
-marie.kana@medlog.com, Marie, Kana, store_keeper"></textarea>
+      <div class="hint" style="font-size:13px;">Une ligne par utilisateur : <strong>email, prénom, nom</strong>. Séparateur : virgule, point-virgule ou tabulation (copier-coller depuis Excel). Les comptes sont créés comme « Utilisateur » ; <strong>attribuez ensuite leur groupe</strong> dans la liste ci-dessous (sans groupe, ils n'ont aucun accès).</div>
+      <textarea id="bulk-users" rows="6" placeholder="jean.dupont@medlog.com, Jean, Dupont
+marie.kana@medlog.com, Marie, Kana"></textarea>
       <div class="field" style="max-width:320px;"><label for="bulk-pwd">Mot de passe initial commun (optionnel)</label><input type="text" id="bulk-pwd" placeholder="vide = un mot de passe généré par compte"></div>
       <div id="bulk-error"></div>
       <button class="btn" data-action="bulk-import-users">Importer les comptes</button>
