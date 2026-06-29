@@ -219,7 +219,8 @@ let state = {
   execLoaded:false, execData:null,
   reportSource:"tickets", reportFilters:{}, reportRows:null, reportRunning:false, reportError:null,
   canInstall:false,
-  settings:{}, settingsLoaded:false
+  settings:{}, settingsLoaded:false,
+  groups:[], groupPerms:[], selectedGroupId:null
 };
 
 // --- Utilitaires ---
@@ -265,6 +266,31 @@ async function fetchSettings(){
   try{ const { data } = await sb.from("app_settings").select("key,value"); const m={}; (data||[]).forEach(r=>{ m[r.key]=r.value; }); state.settings=m; state.settingsLoaded=true; }
   catch(_){ state.settingsLoaded=true; }
 }
+
+// =========================== GROUPES & PERMISSIONS ===========================
+// Écrans contrôlables dans la grille de permissions (niveau module).
+const SCREENS = [
+  {key:"dashboard",   label:"Tableau de bord"},
+  {key:"exec",        label:"Direction (tableau de bord)"},
+  {key:"reports",     label:"Rapports"},
+  {key:"tickets",     label:"Tickets"},
+  {key:"assets",      label:"Parc (actifs)"},
+  {key:"stock",       label:"Stock"},
+  {key:"procurement", label:"Achats"},
+  {key:"projects",    label:"Projets"},
+  {key:"maintenance", label:"Maintenance (administration)"},
+];
+const PERM_ACTIONS = [["view","Voir"],["create","Créer"],["edit","Modifier"],["delete","Supprimer"]];
+async function fetchGroups(){
+  try{
+    const [g, gp] = await Promise.all([
+      sb.from("groups").select("*").order("name"),
+      sb.from("group_permissions").select("*")
+    ]);
+    state.groups=g.data||[]; state.groupPerms=gp.data||[];
+  }catch(_){ /* tables pas encore créées : sans effet */ }
+}
+function gperm(groupId, screen){ return state.groupPerms.find(p=>p.group_id===groupId && p.screen===screen) || {can_view:false,can_create:false,can_edit:false,can_delete:false}; }
 function displayName(p){ if(!p) return ""; const fl=[p.first_name,p.last_name].filter(Boolean).join(" ").trim(); return fl || p.full_name || p.email || ""; }
 function myName(){ return state.profile ? displayName(state.profile) : ""; }
 function getTicket(id){ return state.tickets.find(t=>t.id===id); }
@@ -395,7 +421,7 @@ async function loadProfile(){
 }
 async function loadData(){
   const [tk, lk, an, profs] = await Promise.all([ fetchTickets(), fetchLookups(), fetchAnnouncements(),
-    sb.from("profiles").select("id, full_name, first_name, last_name, email").eq("is_active",true).order("full_name"), fetchSettings() ]);
+    sb.from("profiles").select("id, full_name, first_name, last_name, email").eq("is_active",true).order("full_name"), fetchSettings(), fetchGroups() ]);
   state.tickets=tk; state.lookups=lk; state.announcements=an; state.profilesList=profs.data||[];
   if(!state.newService) state.newService = getServices()[0];
 }
@@ -967,6 +993,7 @@ function renderUsers(){
         <div class="col-main"><div class="subject">${esc(displayName(u))||"(sans nom)"} ${active?"":'<span class="badge priority-Critical">Désactivé</span>'}</div><div class="meta"><span class="ticket-id">${esc(u.email)}</span></div></div>
         <div class="col-status" style="align-items:flex-end;gap:6px;"><div class="btn-row">
           <select data-action="change-role" data-id="${u.id}" style="font-size:12px;padding:5px 8px;">${roleOpts}</select>
+          <select data-action="change-group" data-id="${u.id}" style="font-size:12px;padding:5px 8px;" title="Groupe">${`<option value="">— groupe —</option>`+(state.groups||[]).map(g=>`<option value="${g.id}" ${u.group_id===g.id?'selected':''}>${esc(g.name)}</option>`).join("")}</select>
           <button class="btn tiny secondary" data-action="toggle-active" data-id="${u.id}" data-active="${active?'0':'1'}">${active?'Désactiver':'Activer'}</button>
           <button class="btn tiny secondary" data-action="reset-password" data-id="${u.id}" data-name="${esc(displayName(u)||u.email)}">Réinitialiser MDP</button>
         </div></div>
@@ -1701,6 +1728,7 @@ function renderMaintenance(){
     <button data-action="maint-subview" data-view="services" class="${state.maintSubview==='services'?'active':''}">Services</button>
     <button data-action="maint-subview" data-view="vendors" class="${state.maintSubview==='vendors'?'active':''}">Fournisseurs</button>
     <button data-action="maint-subview" data-view="users" class="${state.maintSubview==='users'?'active':''}">Utilisateurs</button>
+    <button data-action="maint-subview" data-view="groupes" class="${state.maintSubview==='groupes'?'active':''}">Groupes & permissions</button>
     <button data-action="maint-subview" data-view="parametres" class="${state.maintSubview==='parametres'?'active':''}">Paramètres</button>
   </div>`;
   let body;
@@ -1709,6 +1737,7 @@ function renderMaintenance(){
   else if(state.maintSubview==="services") body=maintServices();
   else if(state.maintSubview==="vendors") body=maintVendors();
   else if(state.maintSubview==="users") body=maintUsers();
+  else if(state.maintSubview==="groupes") body=maintGroupes();
   else if(state.maintSubview==="parametres") body=maintParametres();
   else body=maintAnnonces();
   return `<h1 class="page-title">Maintenance</h1><p class="page-sub">Annonces, listes configurables, sites, services, fournisseurs et utilisateurs.</p>${sub}${body}`;
@@ -1716,6 +1745,41 @@ function renderMaintenance(){
 function maintUsers(){
   if(!state.usersLoaded){ loadUsers(); return `<div class="empty-state">Chargement des utilisateurs…</div>`; }
   return renderUsers();
+}
+function maintGroupes(){
+  const groups=state.groups||[];
+  const sel=state.selectedGroupId || (groups[0]&&groups[0].id) || null;
+  const groupList=(groups.length?groups.map(g=>`<button class="btn tiny ${g.id===sel?'':'secondary'}" data-action="select-group" data-id="${g.id}" style="display:block;width:100%;text-align:left;margin-bottom:4px;">${esc(g.name)}${g.is_active?'':' (inactif)'}</button>`).join(""):`<div class="hint" style="font-size:12px;">Aucun groupe pour l'instant.</div>`);
+  const create=`<div class="field" style="margin-top:12px;"><label for="new-group">Nouveau groupe</label><input type="text" id="new-group" placeholder="ex. Commercial"></div><button class="btn tiny" data-action="add-group">Créer le groupe</button>`;
+  let grid=`<div class="empty-state">Sélectionnez ou créez un groupe.</div>`;
+  if(sel){
+    const g=groups.find(x=>x.id===sel)||{};
+    const th=t=>`<th style="font-size:11px;color:var(--ink-soft);padding:6px 4px;">${t}</th>`;
+    const rows=SCREENS.map(s=>{
+      const p=gperm(sel,s.key);
+      const cb=(act,val)=>`<input type="checkbox" id="gp-${s.key}-${act}" ${val?"checked":""}>`;
+      return `<tr><td style="padding:6px 8px;border-bottom:1px solid var(--border);font-size:13px;">${esc(s.label)}</td>
+        <td style="text-align:center;border-bottom:1px solid var(--border);">${cb("view",p.can_view)}</td>
+        <td style="text-align:center;border-bottom:1px solid var(--border);">${cb("create",p.can_create)}</td>
+        <td style="text-align:center;border-bottom:1px solid var(--border);">${cb("edit",p.can_edit)}</td>
+        <td style="text-align:center;border-bottom:1px solid var(--border);">${cb("delete",p.can_delete)}</td>
+        <td style="text-align:center;border-bottom:1px solid var(--border);"><button class="btn tiny" data-action="gp-row-full" data-screen="${s.key}">Tout</button></td></tr>`;
+    }).join("");
+    grid=`<div class="card"><div class="section-label">Permissions — ${esc(g.name)}</div>
+      <div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;">
+        <tr><th style="text-align:left;padding:6px 8px;border-bottom:2px solid var(--border);font-size:11px;color:var(--ink-soft);">Écran</th>${th("Voir")}${th("Créer")}${th("Modifier")}${th("Supprimer")}${th("")}</tr>
+        ${rows}</table></div>
+      <div id="gp-result"></div>
+      <div class="btn-row" style="margin-top:12px;"><button class="btn" data-action="save-group-perms" data-id="${sel}">Enregistrer les permissions</button>
+        <button class="btn secondary" data-action="toggle-group-active" data-id="${sel}">${g.is_active?'Désactiver':'Activer'} le groupe</button></div>
+    </div>`;
+  }
+  return `<p class="page-sub" style="margin-top:0;">Définissez des groupes (souvent par service) et cochez, écran par écran, ce que chaque groupe peut faire. L'attribution des utilisateurs se fait dans l'onglet <strong>Utilisateurs</strong>.</p>
+    <div class="hint" style="font-size:12px;">À ce stade, ces permissions <strong>structurent</strong> l'accès ; leur application effective à l'interface sera activée à l'étape suivante. L'administrateur conserve toujours un accès complet.</div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;align-items:flex-start;">
+      <div style="flex:0 0 230px;min-width:200px;"><div class="section-label">Groupes</div>${groupList}${create}</div>
+      <div style="flex:1;min-width:340px;">${grid}</div>
+    </div>`;
 }
 function maintParametres(){
   const cats=[...new Set(SETTINGS_DEFS.map(d=>d.cat))];
@@ -1919,7 +1983,7 @@ function exportMedlogixCSV(){
 
 // =========================== EVENTS ===========================
 function bindEvents(){
-  document.querySelectorAll("[data-action]").forEach(el=>{ el.addEventListener(el.dataset.action==="change-role"?"change":"click", onAction); });
+  document.querySelectorAll("[data-action]").forEach(el=>{ el.addEventListener(["change-role","change-group"].includes(el.dataset.action)?"change":"click", onAction); });
   const wire=(id,fn)=>{const e=document.getElementById(id); if(e) e.addEventListener("change",fn);};
   wire("f-status",e=>{state.filter.status=e.target.value; render();});
   wire("f-service",e=>{state.filter.service=e.target.value; render();});
@@ -2028,6 +2092,45 @@ async function onAction(e){
       unbusy(); render();
       const b2=document.getElementById("settings-result"); if(b2) b2.innerHTML=`<div class="ok-msg">Paramètres enregistrés. Les réglages du mur d'écran s'appliquent au prochain rechargement de celui-ci.</div>`;
     }catch(err){ unbusy(); const b2=document.getElementById("settings-result"); if(b2) b2.innerHTML=`<div class="error-msg">Échec : ${esc(err.message||String(err))}.<br>Vérifiez que la table « app_settings » est créée.</div>`; }
+    return;
+  }
+  if(action==="select-group"){ state.selectedGroupId=el.dataset.id; render(); return; }
+  if(action==="add-group"){
+    const name=(document.getElementById("new-group").value||"").trim();
+    if(!name){ alert("Saisissez un nom de groupe."); return; }
+    busy("Création du groupe…");
+    try{ const { data, error } = await sb.from("groups").insert({ name }).select().single(); if(error) throw error; await fetchGroups(); state.selectedGroupId=data.id; unbusy(); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="gp-row-full"){
+    const sc=el.dataset.screen; ["view","create","edit","delete"].forEach(a=>{ const c=document.getElementById("gp-"+sc+"-"+a); if(c) c.checked=true; });
+    return;
+  }
+  if(action==="save-group-perms"){
+    const gid=el.dataset.id; const box=document.getElementById("gp-result");
+    const rows=SCREENS.map(s=>({ group_id:gid, screen:s.key,
+      can_view:!!document.getElementById("gp-"+s.key+"-view")?.checked,
+      can_create:!!document.getElementById("gp-"+s.key+"-create")?.checked,
+      can_edit:!!document.getElementById("gp-"+s.key+"-edit")?.checked,
+      can_delete:!!document.getElementById("gp-"+s.key+"-delete")?.checked }));
+    busy("Enregistrement des permissions…");
+    try{ const { error } = await sb.from("group_permissions").upsert(rows, { onConflict:"group_id,screen" }); if(error) throw error; await fetchGroups(); unbusy(); render(); const b=document.getElementById("gp-result"); if(b) b.innerHTML=`<div class="ok-msg">Permissions enregistrées.</div>`; }
+    catch(err){ unbusy(); const b=document.getElementById("gp-result"); if(b) b.innerHTML=`<div class="error-msg">Échec : ${esc(err.message||String(err))}.<br>Vérifiez que les tables « groups » et « group_permissions » sont créées.</div>`; }
+    return;
+  }
+  if(action==="toggle-group-active"){
+    const gid=el.dataset.id; const g=(state.groups||[]).find(x=>x.id===gid); if(!g) return;
+    busy("…");
+    try{ await sb.from("groups").update({ is_active:!g.is_active }).eq("id",gid); await fetchGroups(); unbusy(); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="change-group"){
+    const id=el.dataset.id; const gid=el.value||null;
+    busy("…");
+    try{ await sb.from("profiles").update({ group_id:gid }).eq("id",id); await loadUsers(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
     return;
   }
   if(action==="logout"){ if(monDataTimer){clearInterval(monDataTimer);monDataTimer=null;} if(monClockTimer){clearInterval(monClockTimer);monClockTimer=null;} await sb.auth.signOut(); state.session=null; state.profile=null; state.view="dashboard"; render(); return; }
