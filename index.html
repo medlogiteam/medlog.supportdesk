@@ -415,6 +415,11 @@ async function afterLogin(){
   }catch(e){ state.loadError = e.message||String(e); }
   state.booting=false;
   state.view = isMonitor() ? "monitor" : "dashboard";
+  // Mur d'écran : restaurer l'onglet courant après un rechargement complet (mémorisé dans l'URL).
+  if(isMonitor()){
+    const h=(location.hash||"").replace("#","");
+    state.view = ["monitor","report","announces"].includes(h) ? h : "monitor";
+  }
   // Écran d'accueil : pour un non-admin, le premier écran autorisé par son groupe.
   if(state.profile && !isMonitor() && !isAdmin()){
     const ng=navGroups(); const allowed=ng.flatMap(g=>g.leaves.filter(lf=>lf.show()).map(lf=>lf.v));
@@ -2046,7 +2051,7 @@ async function onAction(e){
   const unbusy=()=>{ el.disabled=false; if(el.dataset._t) el.textContent=el.dataset._t; };
 
   if(action==="nav"){ state.view=el.dataset.view; state.selectedTicketId=null; state.staffNew=false; state.selectedAssetId=null; state.assetNew=false; state.selectedStockId=null; state.stockNew=false; state.selectedPrId=null; state.prNew=false; state.prDraftItems=[]; state.selectedPoId=null; if(el.dataset.view==="users"){state.usersLoaded=false;} if(el.dataset.view==="assets"){state.assetsLoaded=false;} if(el.dataset.view==="stock"){state.stockLoaded=false;} if(el.dataset.view==="procurement"){state.prLoaded=false;} if(el.dataset.view==="exec"){state.execLoaded=false;} if(el.dataset.view==="projects"){state.projectsLoaded=false; state.selectedProjectId=null; state.projectNew=false;} if(el.dataset.view==="maintenance"){state.locationsLoaded=false; state.departmentsLoaded=false; state.vendorsLoaded=false; state.usersLoaded=false;} render(); return; }
-  if(action==="mon-nav"){ state.view=el.dataset.view; render(); return; }
+  if(action==="mon-nav"){ state.view=el.dataset.view; try{ history.replaceState(null,"","#"+state.view); }catch(_){} render(); return; }
   if(action==="refresh-now"){ busy("…"); try{ await reloadTickets(); state.lastSync=Date.now(); }catch(e){} render(); return; }
   if(action==="fullscreen"){ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(e){} return; }
   if(action==="print-report"){ window.print(); return; }
