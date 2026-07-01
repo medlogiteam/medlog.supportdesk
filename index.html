@@ -216,6 +216,7 @@ let state = {
   pos:[], vendors:[], vendorsLoaded:false, procSubview:"requests", selectedPoId:null, poItems:[],
   poReceipts:[], receivedByItem:{}, poReceiving:false,
   projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[],
+  projectsSubview:"projects", activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
   execLoaded:false, execData:null,
   reportSource:"tickets", reportFilters:{}, reportRows:null, reportRunning:false, reportError:null,
   canInstall:false,
@@ -1578,11 +1579,97 @@ async function reloadProjects(){
   const { data } = await sb.from("projects").select("*, manager:manager_id(full_name), location:location_id(name)").order("created_at",{ascending:false});
   state.projects=data||[];
 }
+// =========================== SUIVI PAR SERVICE (activités) ===========================
+const ACT_STATUSES=["À faire","En cours","Bloqué","Terminé"];
+function actColor(s){ return s==="Terminé"?"#2e9e5b":s==="Bloqué"?"#d9534f":s==="En cours"?"#2e75b6":"#8A99AC"; }
+function actBadge(s){ const c=actColor(s); return `<span class="badge" style="background:${c}22;color:${c};">${esc(s||"—")}</span>`; }
+async function loadActivities(){
+  const [ac, deps] = await Promise.all([
+    sb.from("service_activities").select("*, department:department_id(name), assignee:assignee_id(full_name)").order("created_at",{ascending:false}),
+    (state.departments&&state.departments.length)?Promise.resolve({data:state.departments}):sb.from("departments").select("*").eq("is_active",true).order("name")
+  ]);
+  state.activities=ac.data||[]; if(deps&&deps.data) state.departments=deps.data;
+  state.activitiesLoaded=true; render();
+}
+async function loadActivityComments(id){
+  const { data } = await sb.from("activity_comments").select("*, author:author_id(full_name)").eq("activity_id",id).order("created_at");
+  state.activityComments=data||[]; render();
+}
+function renderActivitiesArea(){
+  const f=state.activityFilter;
+  const depOpts=`<option value="all">Tous les services</option>`+(state.departments||[]).map(d=>`<option value="${d.id}" ${f.department===d.id?'selected':''}>${esc(d.name)}</option>`).join("");
+  const stOpts=`<option value="all">Tous statuts</option>`+ACT_STATUSES.map(s=>`<option value="${esc(s)}" ${f.status===s?'selected':''}>${esc(s)}</option>`).join("");
+  let list=state.activities.slice();
+  if(f.department!=="all") list=list.filter(a=>a.department_id===f.department);
+  if(f.status!=="all") list=list.filter(a=>a.status===f.status);
+  if((f.search||"").trim()){ const q=f.search.toLowerCase(); list=list.filter(a=>(a.title||"").toLowerCase().includes(q)); }
+  const newBtn=canManageProjects()?`<button class="btn secondary" data-action="act-new">+ Nouvelle activité</button>`:"";
+  const rows=list.map(a=>`<div class="ticket-row" data-action="open-activity" data-id="${a.id}">
+    <div class="col-main"><div class="subject">${esc(a.title)}</div>
+      <div class="meta"><span class="badge svc">${a.department?esc(a.department.name):"—"}</span>${a.assignee?`<span>${esc(a.assignee.full_name)}</span>`:""}${a.due_date?`<span>Échéance ${esc(a.due_date)}</span>`:""}</div></div>
+    <div class="col-status">${a.priority?`<span class="badge priority-${a.priority}">${esc(a.priority)}</span>`:""}${actBadge(a.status)}</div></div>`).join("");
+  return `<h1 class="page-title">Suivi par service</h1><p class="page-sub">Registre des actions et activités par service. ${list.length} activité(s).</p>
+    <div class="filters">
+      <div class="field"><label>Service</label><select id="act-f-dep">${depOpts}</select></div>
+      <div class="field"><label>Statut</label><select id="act-f-status">${stOpts}</select></div>
+      <div class="field search"><label>Recherche</label><input type="text" id="act-f-search" placeholder="Intitulé…" value="${esc(f.search||'')}"></div>
+      ${newBtn}
+    </div>
+    ${list.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucune activité pour ces critères.</div>`}`;
+}
+function activityFormFields(a){
+  a=a||{};
+  const depOpts=`<option value="">— service —</option>`+(state.departments||[]).map(d=>`<option value="${d.id}" ${a.department_id===d.id?'selected':''}>${esc(d.name)}</option>`).join("");
+  const stOpts=ACT_STATUSES.map(s=>`<option value="${esc(s)}" ${(a.status||"À faire")===s?'selected':''}>${esc(s)}</option>`).join("");
+  const prOpts=`<option value="">—</option>`+getPriorities().map(p=>`<option value="${esc(p)}" ${a.priority===p?'selected':''}>${esc(p)}</option>`).join("");
+  const asgOpts=`<option value="">— responsable —</option>`+(state.profilesList||[]).map(p=>`<option value="${p.id}" ${a.assignee_id===p.id?'selected':''}>${esc(p.full_name||p.email)}</option>`).join("");
+  return `<div class="field"><label>Intitulé *</label><input type="text" id="act-title" value="${esc(a.title||'')}" placeholder="Ex. Relancer le client X"></div>
+    <div class="field-row">
+      <div class="field"><label>Service *</label><select id="act-dep">${depOpts}</select></div>
+      <div class="field"><label>Statut</label><select id="act-status">${stOpts}</select></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Priorité</label><select id="act-priority">${prOpts}</select></div>
+      <div class="field"><label>Responsable</label><select id="act-assignee">${asgOpts}</select></div>
+      <div class="field"><label>Échéance</label><input type="date" id="act-due" value="${esc(a.due_date||'')}"></div>
+    </div>
+    <div class="field"><label>Description</label><textarea id="act-desc" rows="3">${esc(a.description||'')}</textarea></div>`;
+}
+function renderActivityForm(){
+  return `<h1 class="page-title">Nouvelle activité</h1>
+    <div class="card">${activityFormFields({})}<div id="act-form-err"></div>
+      <button class="btn" data-action="save-activity">Créer l'activité</button></div>`;
+}
+function renderActivityDetail(a){
+  const canEdit=canManageProjects();
+  const comments=(state.activityComments||[]).map(c=>`<div style="padding:8px 0;border-bottom:1px solid var(--border);"><div style="font-size:12px;color:var(--ink-soft);">${esc(c.author?c.author.full_name:'—')} · ${fmtDate(c.created_at)}</div><div style="font-size:13.5px;white-space:pre-wrap;">${esc(c.body)}</div></div>`).join("")||`<div class="hint" style="font-size:12px;">Aucun commentaire.</div>`;
+  const editCard = canEdit
+    ? `<div class="card"><div class="section-label">Modifier</div>${activityFormFields(a)}<div id="act-form-err"></div>
+        <div class="btn-row"><button class="btn" data-action="save-activity" data-id="${a.id}">Enregistrer</button>
+        <button class="btn danger" data-action="del-activity" data-id="${a.id}">Supprimer</button></div></div>`
+    : `<div class="card"><div class="section-label">${esc(a.title)}</div>
+        <div class="meta" style="display:flex;gap:12px;flex-wrap:wrap;color:var(--ink-soft);font-size:13px;"><span class="badge svc">${a.department?esc(a.department.name):'—'}</span>${actBadge(a.status)}${a.priority?`<span class="badge priority-${a.priority}">${esc(a.priority)}</span>`:''}${a.assignee?`<span>${esc(a.assignee.full_name)}</span>`:''}${a.due_date?`<span>Échéance ${esc(a.due_date)}</span>`:''}</div>
+        ${a.description?`<p style="margin-top:10px;white-space:pre-wrap;">${esc(a.description)}</p>`:''}</div>`;
+  return `<h1 class="page-title">${esc(a.title)}</h1>
+    ${editCard}
+    <div class="card"><div class="section-label">Suivi & commentaires</div>
+      ${comments}
+      <div class="field" style="margin-top:10px;"><label>Ajouter un commentaire</label><textarea id="act-comment" rows="2" placeholder="Mise à jour, blocage, question…"></textarea></div>
+      <button class="btn secondary" data-action="add-act-comment" data-id="${a.id}">Commenter</button>
+    </div>`;
+}
 function renderProjectsArea(){
-  if(!state.projectsLoaded){ loadProjects(); return `<div class="empty-state">Chargement des projets…</div>`; }
-  if(state.selectedProjectId){ const pr=state.projects.find(x=>x.id===state.selectedProjectId); if(pr) return `<button class="back-link" data-action="project-back">&larr; Retour</button>`+renderProjectDetail(pr); state.selectedProjectId=null; }
-  if(state.projectNew && canManageProjects()) return `<button class="back-link" data-action="project-cancel">&larr; Retour aux projets</button>`+renderProjectForm();
-  return renderProjectList();
+  const sub=`<div class="subnav"><button data-action="proj-subview" data-view="projects" class="${state.projectsSubview!=='activities'?'active':''}">Projets</button><button data-action="proj-subview" data-view="activities" class="${state.projectsSubview==='activities'?'active':''}">Suivi par service</button></div>`;
+  if(state.projectsSubview==="activities"){
+    if(!state.activitiesLoaded){ loadActivities(); return sub+`<div class="empty-state">Chargement des activités…</div>`; }
+    if(state.selectedActivityId){ const a=state.activities.find(x=>x.id===state.selectedActivityId); if(a) return sub+`<button class="back-link" data-action="act-back">&larr; Retour</button>`+renderActivityDetail(a); state.selectedActivityId=null; }
+    if(state.activityNew && canManageProjects()) return sub+`<button class="back-link" data-action="act-back">&larr; Retour</button>`+renderActivityForm();
+    return sub+renderActivitiesArea();
+  }
+  if(!state.projectsLoaded){ loadProjects(); return sub+`<div class="empty-state">Chargement des projets…</div>`; }
+  if(state.selectedProjectId){ const pr=state.projects.find(x=>x.id===state.selectedProjectId); if(pr) return sub+`<button class="back-link" data-action="project-back">&larr; Retour</button>`+renderProjectDetail(pr); state.selectedProjectId=null; }
+  if(state.projectNew && canManageProjects()) return sub+`<button class="back-link" data-action="project-cancel">&larr; Retour aux projets</button>`+renderProjectForm();
+  return sub+renderProjectList();
 }
 function renderProjectList(){
   const f=state.projectFilter;
@@ -2030,6 +2117,9 @@ function bindEvents(){
   const sts=document.getElementById("st-search");
   if(sts){ sts.addEventListener("input",e=>{state.stockSearch=e.target.value; render();}); sts.focus(); sts.setSelectionRange(sts.value.length,sts.value.length); }
   wire("pj-status",e=>{state.projectFilter.status=e.target.value; render();});
+  wire("act-f-dep",e=>{state.activityFilter.department=e.target.value; render();});
+  wire("act-f-status",e=>{state.activityFilter.status=e.target.value; render();});
+  wire("act-f-search",e=>{state.activityFilter.search=e.target.value; render();});
   const rsrc=document.getElementById("report-src");
   if(rsrc) rsrc.addEventListener("change",e=>{ state.reportSource=e.target.value; state.reportFilters={}; state.reportRows=null; state.reportError=null; render(); });
   document.querySelectorAll("[data-rf]").forEach(el=>{
@@ -2164,6 +2254,47 @@ async function onAction(e){
     const id=el.dataset.id; const gid=el.value||null;
     busy("…");
     try{ await sb.from("profiles").update({ group_id:gid }).eq("id",id); await loadUsers(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="proj-subview"){ state.projectsSubview=el.dataset.view; state.selectedProjectId=null; state.projectNew=false; state.selectedActivityId=null; state.activityNew=false; render(); return; }
+  if(action==="act-new"){ state.activityNew=true; state.selectedActivityId=null; render(); return; }
+  if(action==="open-activity"){ state.selectedActivityId=el.dataset.id; state.activityComments=[]; render(); await loadActivityComments(el.dataset.id); return; }
+  if(action==="act-back"){ state.selectedActivityId=null; state.activityNew=false; render(); return; }
+  if(action==="save-activity"){
+    const id=el.dataset.id;
+    const title=(document.getElementById("act-title").value||"").trim();
+    const department_id=document.getElementById("act-dep").value||null;
+    const errb=document.getElementById("act-form-err");
+    if(!title){ if(errb) errb.innerHTML=`<div class="error-msg">L'intitulé est obligatoire.</div>`; return; }
+    if(!department_id){ if(errb) errb.innerHTML=`<div class="error-msg">Le service est obligatoire.</div>`; return; }
+    const rec={ title, department_id,
+      status:document.getElementById("act-status").value||"À faire",
+      priority:document.getElementById("act-priority").value||null,
+      assignee_id:document.getElementById("act-assignee").value||null,
+      due_date:document.getElementById("act-due").value||null,
+      description:(document.getElementById("act-desc").value||"").trim()||null };
+    busy("Enregistrement…");
+    try{
+      if(id){ await sb.from("service_activities").update(rec).eq("id",id); }
+      else { rec.created_by=uid(); const { data } = await sb.from("service_activities").insert(rec).select().single(); state.activityNew=false; if(data) state.selectedActivityId=data.id; }
+      state.activitiesLoaded=false; await loadActivities();
+      if(state.selectedActivityId) await loadActivityComments(state.selectedActivityId);
+    }catch(err){ unbusy(); const b=document.getElementById("act-form-err"); if(b) b.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
+  if(action==="del-activity"){
+    if(!confirm("Supprimer définitivement cette activité ?")) return;
+    busy("Suppression…");
+    try{ await sb.from("service_activities").delete().eq("id",el.dataset.id); state.selectedActivityId=null; state.activitiesLoaded=false; await loadActivities(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="add-act-comment"){
+    const id=el.dataset.id; const ta=document.getElementById("act-comment"); const body=(ta.value||"").trim();
+    if(!body) return;
+    busy("…");
+    try{ await sb.from("activity_comments").insert({ activity_id:id, author_id:uid(), body }); ta.value=""; await loadActivityComments(id); unbusy(); }
     catch(err){ alert(err.message||String(err)); unbusy(); }
     return;
   }
