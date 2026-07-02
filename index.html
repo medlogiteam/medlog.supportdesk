@@ -217,6 +217,7 @@ let state = {
   poReceipts:[], receivedByItem:{}, poReceiving:false,
   projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[],
   projectsSubview:"projects", activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
+  myTickets:[], myActivities:[], myTasksLoaded:false, myOpenTicketId:null, myOpenActivityId:null, unseenMentions:0,
   execLoaded:false, execData:null,
   reportSource:"tickets", reportFilters:{}, reportRows:null, reportRunning:false, reportError:null,
   canInstall:false,
@@ -426,16 +427,28 @@ async function afterLogin(){
     const ng=navGroups(); const allowed=ng.flatMap(g=>g.leaves.filter(lf=>lf.show()).map(lf=>lf.v));
     if(allowed.length && !allowed.includes(state.view)) state.view=allowed[0];
   }
-  // Lien profond : ?ticket=INC... ouvre directement le ticket concerné.
-  const tkParam = isMonitor() ? null : new URLSearchParams(location.search).get("ticket");
-  if(tkParam && !state.loadError){
-    const t = state.tickets.find(x=> (x.ticket_no||"")===tkParam || x.id===tkParam);
-    state.view="tickets";
-    if(t) state.selectedTicketId=t.id;
+  // Lien profond : ?ticket=INC... ou ?activity=<id> ouvre directement l'élément.
+  const params = isMonitor() ? null : new URLSearchParams(location.search);
+  const tkParam = params ? params.get("ticket") : null;
+  const acParam = params ? params.get("activity") : null;
+  if(acParam && !state.loadError){
+    state.view="mytasks"; state.myOpenActivityId=acParam; state.myTasksLoaded=false;
     try{ history.replaceState(null,"",location.pathname); }catch(_){}
-    render();
-    if(t) loadActivity(t.id);
-    return;
+    render(); return;
+  }
+  if(tkParam && !state.loadError){
+    if(canViewTickets()){
+      const t = state.tickets.find(x=> (x.ticket_no||"")===tkParam || x.id===tkParam);
+      state.view="tickets"; if(t) state.selectedTicketId=t.id;
+      try{ history.replaceState(null,"",location.pathname); }catch(_){}
+      render(); if(t) loadActivity(t.id); return;
+    } else {
+      // Utilisateur sans accès au module Tickets (ex. tagué) : ouverture via Mes tâches.
+      state.view="mytasks"; state.myTasksLoaded=false;
+      state._pendingTicketParam=tkParam;
+      try{ history.replaceState(null,"",location.pathname); }catch(_){}
+      render(); return;
+    }
   }
   render();
 }
@@ -446,7 +459,7 @@ async function loadProfile(){
 }
 async function loadData(){
   const [tk, lk, an, profs] = await Promise.all([ fetchTickets(), fetchLookups(), fetchAnnouncements(),
-    sb.from("profiles").select("id, full_name, first_name, last_name, email").eq("is_active",true).order("full_name"), fetchSettings(), fetchGroups() ]);
+    sb.from("profiles").select("id, full_name, first_name, last_name, email").eq("is_active",true).order("full_name"), fetchSettings(), fetchGroups(), fetchUnseenMentions() ]);
   state.tickets=tk; state.lookups=lk; state.announcements=an; state.profilesList=profs.data||[];
   if(!state.newService) state.newService = getServices()[0];
 }
@@ -506,7 +519,9 @@ function renderHeader(){
 }
 function navGroups(){
   const r=roleName();
+  const mtLabel = "Mes tâches"+(state.unseenMentions>0?` (${state.unseenMentions})`:"");
   return [
+    { key:"mytasks", label:mtLabel, leaves:[ {v:"mytasks", l:"Mes tâches", show:()=>true} ] },
     { key:"board", label:"Tableau de bord", leaves:[
         {v:"dashboard", l:"Opérationnel", show:()=>canViewDashboard()},
         {v:"exec", l:"Direction", show:()=>canViewExec()},
@@ -541,6 +556,7 @@ function renderMain(){
   if(state.view!=="account" && !allowed.includes(state.view)) state.view = allowed[0];
   const sub=sectionSubnav();
   if(state.view==="account") return renderAccount();
+  if(state.view==="mytasks") return renderMyTasks();
   if(state.view==="dashboard") return canViewDashboard()?sub+renderDashboard():"";
   if(state.view==="exec") return canViewExec()?sub+renderExec():"";
   if(state.view==="reports") return canViewReports()?sub+renderReports():"";
@@ -1617,13 +1633,20 @@ function renderActivitiesArea(){
     </div>
     ${list.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucune activité pour ces critères.</div>`}`;
 }
-function activityFormFields(a){
+function activityFormFields(a, mode){
   a=a||{};
   const depOpts=`<option value="">— service —</option>`+(state.departments||[]).map(d=>`<option value="${d.id}" ${a.department_id===d.id?'selected':''}>${esc(d.name)}</option>`).join("");
   const stOpts=ACT_STATUSES.map(s=>`<option value="${esc(s)}" ${(a.status||"À faire")===s?'selected':''}>${esc(s)}</option>`).join("");
   const prOpts=`<option value="">—</option>`+getPriorities().map(p=>`<option value="${esc(p)}" ${a.priority===p?'selected':''}>${esc(p)}</option>`).join("");
   const asgOpts=`<option value="">— responsable —</option>`+(state.profilesList||[]).map(p=>`<option value="${p.id}" ${a.assignee_id===p.id?'selected':''}>${esc(p.full_name||p.email)}</option>`).join("");
-  return `<div class="field"><label>Intitulé *</label><input type="text" id="act-title" value="${esc(a.title||'')}" placeholder="Ex. Relancer le client X"></div>
+  const editable = mode==="edit";
+  const titleBlock = editable
+    ? `<div class="field"><label>Intitulé (non modifiable)</label><div style="font-weight:600;">${esc(a.title||'')}</div></div>`
+    : `<div class="field"><label>Intitulé *</label><input type="text" id="act-title" value="${esc(a.title||'')}" placeholder="Ex. Relancer le client X"></div>`;
+  const descBlock = editable
+    ? (a.description?`<div class="field"><label>Description (non modifiable)</label><div style="white-space:pre-wrap;">${esc(a.description)}</div></div>`:``)
+    : `<div class="field"><label>Description</label><textarea id="act-desc" rows="3">${esc(a.description||'')}</textarea></div>`;
+  return `${titleBlock}
     <div class="field-row">
       <div class="field"><label>Service *</label><select id="act-dep">${depOpts}</select></div>
       <div class="field"><label>Statut</label><select id="act-status">${stOpts}</select></div>
@@ -1633,20 +1656,21 @@ function activityFormFields(a){
       <div class="field"><label>Responsable</label><select id="act-assignee">${asgOpts}</select></div>
       <div class="field"><label>Échéance</label><input type="date" id="act-due" value="${esc(a.due_date||'')}"></div>
     </div>
-    <div class="field"><label>Description</label><textarea id="act-desc" rows="3">${esc(a.description||'')}</textarea></div>`;
+    ${descBlock}`;
 }
 function renderActivityForm(){
   return `<h1 class="page-title">Nouvelle activité</h1>
-    <div class="card">${activityFormFields({})}<div id="act-form-err"></div>
+    <div class="card">${activityFormFields({},"new")}<div id="act-form-err"></div>
       <button class="btn" data-action="save-activity">Créer l'activité</button></div>`;
 }
 function renderActivityDetail(a){
   const canEdit=canManageProjects();
+  const userOpts=`<option value="">— taguer (optionnel) —</option>`+(state.profilesList||[]).map(u=>`<option value="${u.id}">${esc(u.full_name||u.email)}</option>`).join("");
   const comments=(state.activityComments||[]).map(c=>`<div style="padding:8px 0;border-bottom:1px solid var(--border);"><div style="font-size:12px;color:var(--ink-soft);">${esc(c.author?c.author.full_name:'—')} · ${fmtDate(c.created_at)}</div><div style="font-size:13.5px;white-space:pre-wrap;">${esc(c.body)}</div></div>`).join("")||`<div class="hint" style="font-size:12px;">Aucun commentaire.</div>`;
+  const delBtn = isAdmin()?`<button class="btn danger" data-action="del-activity" data-id="${a.id}">Supprimer</button>`:"";
   const editCard = canEdit
-    ? `<div class="card"><div class="section-label">Modifier</div>${activityFormFields(a)}<div id="act-form-err"></div>
-        <div class="btn-row"><button class="btn" data-action="save-activity" data-id="${a.id}">Enregistrer</button>
-        <button class="btn danger" data-action="del-activity" data-id="${a.id}">Supprimer</button></div></div>`
+    ? `<div class="card"><div class="section-label">Modifier</div>${activityFormFields(a,"edit")}<div id="act-form-err"></div>
+        <div class="btn-row"><button class="btn" data-action="save-activity" data-id="${a.id}">Enregistrer</button>${delBtn}</div></div>`
     : `<div class="card"><div class="section-label">${esc(a.title)}</div>
         <div class="meta" style="display:flex;gap:12px;flex-wrap:wrap;color:var(--ink-soft);font-size:13px;"><span class="badge svc">${a.department?esc(a.department.name):'—'}</span>${actBadge(a.status)}${a.priority?`<span class="badge priority-${a.priority}">${esc(a.priority)}</span>`:''}${a.assignee?`<span>${esc(a.assignee.full_name)}</span>`:''}${a.due_date?`<span>Échéance ${esc(a.due_date)}</span>`:''}</div>
         ${a.description?`<p style="margin-top:10px;white-space:pre-wrap;">${esc(a.description)}</p>`:''}</div>`;
@@ -1655,8 +1679,52 @@ function renderActivityDetail(a){
     <div class="card"><div class="section-label">Suivi & commentaires</div>
       ${comments}
       <div class="field" style="margin-top:10px;"><label>Ajouter un commentaire</label><textarea id="act-comment" rows="2" placeholder="Mise à jour, blocage, question…"></textarea></div>
-      <button class="btn secondary" data-action="add-act-comment" data-id="${a.id}">Commenter</button>
+      <div class="field"><label>Taguer une personne (e-mail + notification)</label><select id="act-comment-tag">${userOpts}</select></div>
+      <div id="act-comment-err"></div>
+      <button class="btn secondary" data-action="add-act-comment" data-id="${a.id}" data-title="${esc(a.title)}">Commenter</button>
+      <div class="hint" style="font-size:12px;">La personne taguée recevra un e-mail et verra l'activité dans « Mes tâches ».</div>
     </div>`;
+}
+// =========================== MES TÂCHES ===========================
+async function fetchUnseenMentions(){
+  try{ const { count } = await sb.from("mentions").select("id",{count:'exact',head:true}).eq("user_id",uid()).eq("seen",false); state.unseenMentions=count||0; }
+  catch(_){ state.unseenMentions=0; }
+}
+async function loadMyTasks(){
+  const me=uid();
+  const { data: mnts } = await sb.from("mentions").select("*").eq("user_id",me).order("created_at",{ascending:false});
+  const mentions=mnts||[];
+  const tIds=[...new Set(mentions.filter(m=>m.subject_type==='ticket').map(m=>m.subject_id))];
+  const aIds=[...new Set(mentions.filter(m=>m.subject_type==='activity').map(m=>m.subject_id))];
+  const tSel="*, requester:requester_id(full_name), assignee:assignee_id(full_name)";
+  const aSel="*, department:department_id(name), assignee:assignee_id(full_name)";
+  const [tA, tT, aA, aT] = await Promise.all([
+    sb.from("tickets").select(tSel).eq("assignee_id",me),
+    tIds.length?sb.from("tickets").select(tSel).in("id",tIds):Promise.resolve({data:[]}),
+    sb.from("service_activities").select(aSel).eq("assignee_id",me),
+    aIds.length?sb.from("service_activities").select(aSel).in("id",aIds):Promise.resolve({data:[]})
+  ]);
+  const tMap={}; [...(tA.data||[]),...(tT.data||[])].forEach(t=>tMap[t.id]=t); state.myTickets=Object.values(tMap);
+  const aMap={}; [...(aA.data||[]),...(aT.data||[])].forEach(a=>aMap[a.id]=a); state.myActivities=Object.values(aMap);
+  // résoudre un lien profond ticket en attente (utilisateur sans accès module)
+  if(state._pendingTicketParam){ const t=state.myTickets.find(x=>(x.ticket_no||"")===state._pendingTicketParam||x.id===state._pendingTicketParam); if(t){ state.myOpenTicketId=t.id; } state._pendingTicketParam=null; }
+  // marquer les mentions comme vues
+  const unseen=mentions.filter(m=>!m.seen).map(m=>m.id);
+  if(unseen.length){ try{ await sb.from("mentions").update({seen:true}).in("id",unseen); }catch(_){} }
+  state.unseenMentions=0; state.myTasksLoaded=true; render();
+  if(state.myOpenTicketId) loadActivity(state.myOpenTicketId);
+  if(state.myOpenActivityId) loadActivityComments(state.myOpenActivityId);
+}
+function renderMyTasks(){
+  if(!state.myTasksLoaded){ loadMyTasks(); return `<div class="empty-state">Chargement de vos tâches…</div>`; }
+  if(state.myOpenActivityId){ const a=state.myActivities.find(x=>x.id===state.myOpenActivityId); if(a) return `<button class="back-link" data-action="mt-back">&larr; Mes tâches</button>`+renderActivityDetail(a); state.myOpenActivityId=null; }
+  if(state.myOpenTicketId){ const t=state.myTickets.find(x=>x.id===state.myOpenTicketId); if(t) return `<button class="back-link" data-action="mt-back">&larr; Mes tâches</button>`+renderTicketDetail(t); state.myOpenTicketId=null; }
+  const meName=myName();
+  const tRows=state.myTickets.map(t=>`<div class="ticket-row" data-action="mt-open-ticket" data-id="${t.id}"><div class="col-main"><div class="subject">${esc(t.subject)} <span class="ticket-id">${esc(t.ticket_no||"")}</span></div><div class="meta"><span class="badge svc">${esc(t.service||"")}</span><span>${t.assignee&&t.assignee.full_name===meName?'assigné à moi':'tagué'}</span></div></div><div class="col-status"><span class="badge ${statusClass(t.status)}">${esc(t.status)}</span></div></div>`).join("")||`<div class="empty-state">Aucun ticket.</div>`;
+  const aRows=state.myActivities.map(a=>`<div class="ticket-row" data-action="mt-open-activity" data-id="${a.id}"><div class="col-main"><div class="subject">${esc(a.title)}</div><div class="meta"><span class="badge svc">${a.department?esc(a.department.name):"—"}</span><span>${a.assignee&&a.assignee.full_name===meName?'assigné à moi':'tagué'}</span></div></div><div class="col-status">${actBadge(a.status)}</div></div>`).join("")||`<div class="empty-state">Aucune activité.</div>`;
+  return `<h1 class="page-title">Mes tâches</h1><p class="page-sub">Les tickets et activités qui vous sont assignés ou dans lesquels vous êtes tagué·e.</p>
+    <div class="section-label">Tickets (${state.myTickets.length})</div><div class="ticket-list">${tRows}</div>
+    <div class="section-label" style="margin-top:20px;">Activités (${state.myActivities.length})</div><div class="ticket-list">${aRows}</div>`;
 }
 function renderProjectsArea(){
   const sub=`<div class="subnav"><button data-action="proj-subview" data-view="projects" class="${state.projectsSubview!=='activities'?'active':''}">Projets</button><button data-action="proj-subview" data-view="activities" class="${state.projectsSubview==='activities'?'active':''}">Suivi par service</button></div>`;
@@ -2263,21 +2331,24 @@ async function onAction(e){
   if(action==="act-back"){ state.selectedActivityId=null; state.activityNew=false; render(); return; }
   if(action==="save-activity"){
     const id=el.dataset.id;
-    const title=(document.getElementById("act-title").value||"").trim();
     const department_id=document.getElementById("act-dep").value||null;
     const errb=document.getElementById("act-form-err");
-    if(!title){ if(errb) errb.innerHTML=`<div class="error-msg">L'intitulé est obligatoire.</div>`; return; }
     if(!department_id){ if(errb) errb.innerHTML=`<div class="error-msg">Le service est obligatoire.</div>`; return; }
-    const rec={ title, department_id,
+    // champs modifiables (intitulé/description exclus : verrouillés en base)
+    const rec={ department_id,
       status:document.getElementById("act-status").value||"À faire",
       priority:document.getElementById("act-priority").value||null,
       assignee_id:document.getElementById("act-assignee").value||null,
-      due_date:document.getElementById("act-due").value||null,
-      description:(document.getElementById("act-desc").value||"").trim()||null };
+      due_date:document.getElementById("act-due").value||null };
     busy("Enregistrement…");
     try{
       if(id){ await sb.from("service_activities").update(rec).eq("id",id); }
-      else { rec.created_by=uid(); const { data } = await sb.from("service_activities").insert(rec).select().single(); state.activityNew=false; if(data) state.selectedActivityId=data.id; }
+      else {
+        const title=(document.getElementById("act-title").value||"").trim();
+        if(!title){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">L'intitulé est obligatoire.</div>`; return; }
+        rec.title=title; rec.description=(document.getElementById("act-desc").value||"").trim()||null; rec.created_by=uid();
+        const { data } = await sb.from("service_activities").insert(rec).select().single(); state.activityNew=false; if(data) state.selectedActivityId=data.id;
+      }
       state.activitiesLoaded=false; await loadActivities();
       if(state.selectedActivityId) await loadActivityComments(state.selectedActivityId);
     }catch(err){ unbusy(); const b=document.getElementById("act-form-err"); if(b) b.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
@@ -2291,13 +2362,27 @@ async function onAction(e){
     return;
   }
   if(action==="add-act-comment"){
-    const id=el.dataset.id; const ta=document.getElementById("act-comment"); const body=(ta.value||"").trim();
-    if(!body) return;
+    const id=el.dataset.id; const title=el.dataset.title||""; const ta=document.getElementById("act-comment"); const body=(ta.value||"").trim();
+    const tagSel=document.getElementById("act-comment-tag"); const tagged=tagSel?tagSel.value:"";
+    const errb=document.getElementById("act-comment-err");
+    if(!body && !tagged){ return; }
     busy("…");
-    try{ await sb.from("activity_comments").insert({ activity_id:id, author_id:uid(), body }); ta.value=""; await loadActivityComments(id); unbusy(); }
-    catch(err){ alert(err.message||String(err)); unbusy(); }
+    try{
+      if(body) await sb.from("activity_comments").insert({ activity_id:id, author_id:uid(), body });
+      if(tagged){
+        await sb.from("mentions").insert({ subject_type:"activity", subject_id:id, user_id:tagged, message:body||null, created_by:uid() });
+        try{ await sb.functions.invoke("notify-user", { body:{ kind:"activity", recipient_id:tagged, activity_id:id, activity_title:title, message:body, tagger_name:myName() } }); }
+        catch(mailErr){ if(errb) errb.innerHTML=`<div class="hint" style="color:var(--warn);font-size:12px;">Personne taguée, mais e-mail non envoyé : ${esc(mailErr.message||String(mailErr))}</div>`; }
+      }
+      if(ta) ta.value=""; if(tagSel) tagSel.value="";
+      await loadActivityComments(id); unbusy();
+    }
+    catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
     return;
   }
+  if(action==="mt-open-ticket"){ state.myOpenTicketId=el.dataset.id; render(); await loadActivity(el.dataset.id); return; }
+  if(action==="mt-open-activity"){ state.myOpenActivityId=el.dataset.id; state.activityComments=[]; render(); await loadActivityComments(el.dataset.id); return; }
+  if(action==="mt-back"){ state.myOpenTicketId=null; state.myOpenActivityId=null; render(); return; }
   if(action==="logout"){ if(monDataTimer){clearInterval(monDataTimer);monDataTimer=null;} if(monClockTimer){clearInterval(monClockTimer);monClockTimer=null;} await sb.auth.signOut(); state.session=null; state.profile=null; state.view="dashboard"; render(); return; }
   if(action==="retry"){ state.booting=true; render(); await afterLogin(); return; }
   if(action==="goto-new"){ state.view="tickets"; state.selectedTicketId=null; state.staffNew=true; if(!state.newService) state.newService=getServices()[0]; render(); return; }
@@ -2386,6 +2471,7 @@ async function onAction(e){
         throw new Error(detail||error.message);
       }
       if(data && data.error) throw new Error(data.error+(data.detail?(" — "+data.detail):""));
+      try{ await sb.from("mentions").insert({ subject_type:"ticket", subject_id:id, user_id:recipient_id, message:message||null, created_by:uid() }); }catch(_){}
       await sb.from("ticket_activity").insert({ ticket_id:id, actor_id:uid(), type:"comment", comment:`🔔 ${userName(recipient_id)} a été notifié·e par e-mail${message?` : ${message}`:""}` });
       await loadActivity(id); render();
     }catch(err){
