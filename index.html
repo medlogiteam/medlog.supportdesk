@@ -205,7 +205,7 @@ let state = {
   tickets:[], lookups:[], announcements:[], roles:[],
   selectedTicketId:null, ticketActivity:[], reopening:false,
   newService:"", filter:{status:"all", service:"all", priority:"all", search:""},
-  dashPeriod:"this_month", customFrom:"", customTo:"",
+  dashPeriod:"all", customFrom:"", customTo:"",
   maintSubview:"annonces", lookupType:"service",
   adminUsers:[], usersLoaded:false,
   assets:[], assetCats:[], assetsLoaded:false, assetFilter:{cat:"all", status:"all", search:""},
@@ -329,7 +329,7 @@ function periodRange(){
   }
   return out;
 }
-function inPeriod(t){ const r=periodRange(); const ms=new Date(t.created_at).getTime(); return ms>=r.from && ms<=r.to; }
+function inPeriod(t){ if(state.dashPeriod==="all") return true; const r=periodRange(); const ms=new Date(t.created_at).getTime(); return ms>=r.from && ms<=r.to; }
 
 function render(){
   document.getElementById("app").innerHTML = renderApp();
@@ -427,28 +427,17 @@ async function afterLogin(){
     const ng=navGroups(); const allowed=ng.flatMap(g=>g.leaves.filter(lf=>lf.show()).map(lf=>lf.v));
     if(allowed.length && !allowed.includes(state.view)) state.view=allowed[0];
   }
-  // Lien profond : ?ticket=INC... ou ?activity=<id> ouvre directement l'élément.
+  // Lien profond : ?ticket=INC... ou ?activity=<id>. Ouverture fiable via « Mes tâches »,
+  // en chargeant l'élément directement (indépendamment du périmètre / d'une mention).
   const params = isMonitor() ? null : new URLSearchParams(location.search);
   const tkParam = params ? params.get("ticket") : null;
   const acParam = params ? params.get("activity") : null;
-  if(acParam && !state.loadError){
-    state.view="mytasks"; state.myOpenActivityId=acParam; state.myTasksLoaded=false;
+  if((acParam || tkParam) && !state.loadError){
+    state.view="mytasks"; state.myTasksLoaded=false;
+    if(acParam) state.myOpenActivityId=acParam;
+    if(tkParam) state._pendingTicketParam=tkParam;
     try{ history.replaceState(null,"",location.pathname); }catch(_){}
     render(); return;
-  }
-  if(tkParam && !state.loadError){
-    if(canViewTickets()){
-      const t = state.tickets.find(x=> (x.ticket_no||"")===tkParam || x.id===tkParam);
-      state.view="tickets"; if(t) state.selectedTicketId=t.id;
-      try{ history.replaceState(null,"",location.pathname); }catch(_){}
-      render(); if(t) loadActivity(t.id); return;
-    } else {
-      // Utilisateur sans accès au module Tickets (ex. tagué) : ouverture via Mes tâches.
-      state.view="mytasks"; state.myTasksLoaded=false;
-      state._pendingTicketParam=tkParam;
-      try{ history.replaceState(null,"",location.pathname); }catch(_){}
-      render(); return;
-    }
   }
   render();
 }
@@ -623,7 +612,7 @@ function announcementBanner(list){
 function scoped(){ return state.tickets.filter(inPeriod); }
 function renderDashboard(){
   const data=scoped(); const c=s=>data.filter(t=>t.status===s).length;
-  const periods=[["today","Aujourd'hui"],["yesterday","Hier"],["last7","7 derniers jours"],["this_month","Ce mois"],["prev_month","Mois précédent"],["this_year","Cette année"],["custom","Personnalisée"]];
+  const periods=[["all","Toutes périodes"],["today","Aujourd'hui"],["yesterday","Hier"],["last7","7 derniers jours"],["this_month","Ce mois"],["prev_month","Mois précédent"],["this_year","Cette année"],["custom","Personnalisée"]];
   const periodSelect=`<select id="dash-period">${periods.map(([v,l])=>`<option value="${v}" ${state.dashPeriod===v?'selected':''}>${l}</option>`).join("")}</select>`;
   const customRange=state.dashPeriod==="custom"?`<div class="field" style="margin-bottom:0;"><label>Du</label><input type="date" id="cf" value="${esc(state.customFrom)}"></div><div class="field" style="margin-bottom:0;"><label>Au</label><input type="date" id="ct" value="${esc(state.customTo)}"></div>`:"";
   const avg=avgResolution(data);
@@ -1665,7 +1654,7 @@ function renderActivityForm(){
 }
 function renderActivityDetail(a){
   const canEdit=canManageProjects();
-  const userOpts=`<option value="">— taguer (optionnel) —</option>`+(state.profilesList||[]).map(u=>`<option value="${u.id}">${esc(u.full_name||u.email)}</option>`).join("");
+  const userOpts=`<option value="">— choisir un utilisateur —</option>`+(state.profilesList||[]).map(u=>`<option value="${u.id}">${esc(u.full_name||u.email)}</option>`).join("");
   const comments=(state.activityComments||[]).map(c=>`<div style="padding:8px 0;border-bottom:1px solid var(--border);"><div style="font-size:12px;color:var(--ink-soft);">${esc(c.author?c.author.full_name:'—')} · ${fmtDate(c.created_at)}</div><div style="font-size:13.5px;white-space:pre-wrap;">${esc(c.body)}</div></div>`).join("")||`<div class="hint" style="font-size:12px;">Aucun commentaire.</div>`;
   const delBtn = isAdmin()?`<button class="btn danger" data-action="del-activity" data-id="${a.id}">Supprimer</button>`:"";
   const editCard = canEdit
@@ -1676,13 +1665,20 @@ function renderActivityDetail(a){
         ${a.description?`<p style="margin-top:10px;white-space:pre-wrap;">${esc(a.description)}</p>`:''}</div>`;
   return `<h1 class="page-title">${esc(a.title)}</h1>
     ${editCard}
+    <div class="card" style="margin-bottom:18px;"><div class="section-label">Taguer un utilisateur (notification e-mail)</div>
+      <div class="field-row">
+        <div class="field"><label for="act-tag-user">Utilisateur à notifier</label><select id="act-tag-user">${userOpts}</select></div>
+        <div class="field"><label for="act-tag-msg">Message (optionnel)</label><input type="text" id="act-tag-msg" placeholder="Pourquoi vous le sollicitez…"></div>
+      </div>
+      <div id="act-tag-err"></div>
+      <div class="btn-row"><button class="btn tiny" data-action="tag-activity" data-id="${a.id}" data-title="${esc(a.title)}">Taguer &amp; notifier</button></div>
+      <div class="hint" style="font-size:12px;">Un e-mail est envoyé et l'activité apparaît dans « Mes tâches » de la personne taguée.</div>
+    </div>
     <div class="card"><div class="section-label">Suivi & commentaires</div>
       ${comments}
       <div class="field" style="margin-top:10px;"><label>Ajouter un commentaire</label><textarea id="act-comment" rows="2" placeholder="Mise à jour, blocage, question…"></textarea></div>
-      <div class="field"><label>Taguer une personne (e-mail + notification)</label><select id="act-comment-tag">${userOpts}</select></div>
       <div id="act-comment-err"></div>
-      <button class="btn secondary" data-action="add-act-comment" data-id="${a.id}" data-title="${esc(a.title)}">Commenter</button>
-      <div class="hint" style="font-size:12px;">La personne taguée recevra un e-mail et verra l'activité dans « Mes tâches ».</div>
+      <button class="btn secondary" data-action="add-act-comment" data-id="${a.id}">Commenter</button>
     </div>`;
 }
 // =========================== MES TÂCHES ===========================
@@ -1706,8 +1702,23 @@ async function loadMyTasks(){
   ]);
   const tMap={}; [...(tA.data||[]),...(tT.data||[])].forEach(t=>tMap[t.id]=t); state.myTickets=Object.values(tMap);
   const aMap={}; [...(aA.data||[]),...(aT.data||[])].forEach(a=>aMap[a.id]=a); state.myActivities=Object.values(aMap);
-  // résoudre un lien profond ticket en attente (utilisateur sans accès module)
-  if(state._pendingTicketParam){ const t=state.myTickets.find(x=>(x.ticket_no||"")===state._pendingTicketParam||x.id===state._pendingTicketParam); if(t){ state.myOpenTicketId=t.id; } state._pendingTicketParam=null; }
+  // Lien profond ticket : charger directement s'il n'est ni assigné ni tagué pour cette personne.
+  if(state._pendingTicketParam){
+    const p=state._pendingTicketParam; state._pendingTicketParam=null;
+    let t=state.myTickets.find(x=>(x.ticket_no||"")===p||x.id===p);
+    if(!t){
+      let q=await sb.from("tickets").select(tSel).eq("ticket_no",p).maybeSingle();
+      if((!q||!q.data) && /^[0-9a-f-]{36}$/i.test(p)){ q=await sb.from("tickets").select(tSel).eq("id",p).maybeSingle(); }
+      if(q && q.data){ t=q.data; state.myTickets=[t, ...state.myTickets]; }
+    }
+    if(t) state.myOpenTicketId=t.id;
+  }
+  // Lien profond activité : charger directement si absente des listes.
+  if(state.myOpenActivityId && !state.myActivities.find(x=>x.id===state.myOpenActivityId)){
+    const q=await sb.from("service_activities").select(aSel).eq("id",state.myOpenActivityId).maybeSingle();
+    if(q && q.data){ state.myActivities=[q.data, ...state.myActivities]; }
+    else { state.myOpenActivityId=null; }
+  }
   // marquer les mentions comme vues
   const unseen=mentions.filter(m=>!m.seen).map(m=>m.id);
   if(unseen.length){ try{ await sb.from("mentions").update({seen:true}).in("id",unseen); }catch(_){} }
@@ -2146,7 +2157,7 @@ function renderMonitorAnnonces(){
 // =========================== RAPPORT ===========================
 function renderReport(){
   const data=state.tickets.filter(inPeriod); const ml=data.filter(t=>t.service==="MEDLOGIX"); const c=s=>ml.filter(t=>t.status===s).length;
-  const periods=[["today","Aujourd'hui"],["yesterday","Hier"],["last7","7 derniers jours"],["this_month","Ce mois"],["prev_month","Mois précédent"],["this_year","Cette année"],["custom","Personnalisée"]];
+  const periods=[["all","Toutes périodes"],["today","Aujourd'hui"],["yesterday","Hier"],["last7","7 derniers jours"],["this_month","Ce mois"],["prev_month","Mois précédent"],["this_year","Cette année"],["custom","Personnalisée"]];
   const periodSelect=`<select id="dash-period">${periods.map(([v,l])=>`<option value="${v}" ${state.dashPeriod===v?'selected':''}>${l}</option>`).join("")}</select>`;
   const customRange=state.dashPeriod==="custom"?`<div class="field" style="margin-bottom:0;"><label>Du</label><input type="date" id="cf" value="${esc(state.customFrom)}"></div><div class="field" style="margin-bottom:0;"><label>Au</label><input type="date" id="ct" value="${esc(state.customTo)}"></div>`:"";
   const avg=(()=>{const ds=ml.filter(t=>t.status==="Closed"&&t.closed_at).map(t=>(new Date(t.closed_at)-new Date(t.created_at))/86400000);return ds.length?ds.reduce((a,b)=>a+b,0)/ds.length:null;})();
@@ -2362,22 +2373,30 @@ async function onAction(e){
     return;
   }
   if(action==="add-act-comment"){
-    const id=el.dataset.id; const title=el.dataset.title||""; const ta=document.getElementById("act-comment"); const body=(ta.value||"").trim();
-    const tagSel=document.getElementById("act-comment-tag"); const tagged=tagSel?tagSel.value:"";
+    const id=el.dataset.id; const ta=document.getElementById("act-comment"); const body=(ta.value||"").trim();
     const errb=document.getElementById("act-comment-err");
-    if(!body && !tagged){ return; }
+    if(!body) return;
     busy("…");
-    try{
-      if(body) await sb.from("activity_comments").insert({ activity_id:id, author_id:uid(), body });
-      if(tagged){
-        await sb.from("mentions").insert({ subject_type:"activity", subject_id:id, user_id:tagged, message:body||null, created_by:uid() });
-        try{ await sb.functions.invoke("notify-user", { body:{ kind:"activity", recipient_id:tagged, activity_id:id, activity_title:title, message:body, tagger_name:myName() } }); }
-        catch(mailErr){ if(errb) errb.innerHTML=`<div class="hint" style="color:var(--warn);font-size:12px;">Personne taguée, mais e-mail non envoyé : ${esc(mailErr.message||String(mailErr))}</div>`; }
-      }
-      if(ta) ta.value=""; if(tagSel) tagSel.value="";
-      await loadActivityComments(id); unbusy();
-    }
+    try{ await sb.from("activity_comments").insert({ activity_id:id, author_id:uid(), body }); if(ta) ta.value=""; await loadActivityComments(id); unbusy(); }
     catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
+  if(action==="tag-activity"){
+    const id=el.dataset.id; const title=el.dataset.title||"";
+    const sel=document.getElementById("act-tag-user"); const tagged=sel?sel.value:"";
+    const msg=(document.getElementById("act-tag-msg")||{}).value||"";
+    const errb=document.getElementById("act-tag-err");
+    if(!tagged){ if(errb) errb.innerHTML=`<div class="error-msg">Choisissez un utilisateur à taguer.</div>`; return; }
+    busy("Envoi de la notification…");
+    try{
+      await sb.from("mentions").insert({ subject_type:"activity", subject_id:id, user_id:tagged, message:msg||null, created_by:uid() });
+      try{ await sb.functions.invoke("notify-user", { body:{ kind:"activity", recipient_id:tagged, activity_id:id, activity_title:title, message:msg, tagger_name:myName() } }); }
+      catch(mailErr){ if(errb){ errb.innerHTML=`<div class="hint" style="color:var(--warn);font-size:12px;">Personne taguée (visible dans ses tâches), mais e-mail non envoyé : ${esc(mailErr.message||String(mailErr))}</div>`; } unbusy(); return; }
+      await sb.from("activity_comments").insert({ activity_id:id, author_id:uid(), body:`🔔 ${userName(tagged)} a été tagué·e${msg?` : ${msg}`:""}` });
+      if(sel) sel.value=""; const m=document.getElementById("act-tag-msg"); if(m) m.value="";
+      await loadActivityComments(id); unbusy();
+      if(errb) errb.innerHTML=`<div class="ok-msg">Notification envoyée.</div>`;
+    }catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
     return;
   }
   if(action==="mt-open-ticket"){ state.myOpenTicketId=el.dataset.id; render(); await loadActivity(el.dataset.id); return; }
