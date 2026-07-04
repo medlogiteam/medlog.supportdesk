@@ -161,6 +161,12 @@
   .mon-other{display:flex; gap:8px; flex-wrap:wrap;}
   .mon-other .chip{background:#16233a; border:1px solid #223150; border-radius:20px; padding:5px 11px; font-size:12px; color:#b9cae3;}
   @media print{ header.topbar, .no-print{display:none!important;} body{background:#fff;} main{max-width:none; padding:0;} .card{break-inside:avoid;} }
+  /* ---- Toasts (notifications non bloquantes) ---- */
+  #toasts{position:fixed;right:18px;bottom:18px;z-index:9999;display:flex;flex-direction:column;gap:10px;}
+  .toast{background:#16233a;color:#eaf1fa;border:1px solid #2e4260;border-radius:10px;padding:12px 16px;font-size:13.5px;box-shadow:0 8px 24px rgba(0,0,0,.35);cursor:pointer;max-width:340px;animation:toastIn .25s ease;}
+  .toast .tt{font-weight:700;margin-bottom:2px;}
+  .toast .tb{color:#b9c8dd;font-size:12.5px;}
+  @keyframes toastIn{from{transform:translateY(8px);opacity:0}to{transform:translateY(0);opacity:1}}
 </style>
 </head>
 <body>
@@ -428,6 +434,15 @@ async function afterLogin(){
     const ng=navGroups(); const allowed=ng.flatMap(g=>g.leaves.filter(lf=>lf.show()).map(lf=>lf.v));
     if(allowed.length && !allowed.includes(state.view)) state.view=allowed[0];
   }
+  // Notifications & rafraîchissement silencieux (utilisateurs connectés, hors mur d'écran).
+  if(!isMonitor()){
+    bgPrevAssigned=myOpenAssignedSet();
+    ensureBgTimer();
+    if((state.unseenMentions||0)>0){
+      const n=state.unseenMentions;
+      setTimeout(()=>showToast("Notifications en attente", `Vous avez ${n} notification${n>1?"s":""} non lue${n>1?"s":""} — cliquez pour ouvrir « Mes tâches »`, "mytasks"), 600);
+    }
+  }
   // Lien profond : ?ticket=INC... ou ?activity=<id>. Ouverture fiable via « Mes tâches »,
   // en chargeant l'élément directement (indépendamment du périmètre / d'une mention).
   const params = isMonitor() ? null : new URLSearchParams(location.search);
@@ -618,14 +633,12 @@ function renderDashboard(){
   const periodSelect=`<select id="dash-period">${periods.map(([v,l])=>`<option value="${v}" ${state.dashPeriod===v?'selected':''}>${l}</option>`).join("")}</select>`;
   const customRange=state.dashPeriod==="custom"?`<div class="field" style="margin-bottom:0;"><label>Du</label><input type="date" id="cf" value="${esc(state.customFrom)}"></div><div class="field" style="margin-bottom:0;"><label>Au</label><input type="date" id="ct" value="${esc(state.customTo)}"></div>`:"";
   const avg=avgResolution(data);
-  const clk=canViewTickets();
-  const kt=(st)=> clk?` data-action="kpi-tickets" data-status="${st}" style="cursor:pointer;" title="Voir ces tickets"`:``;
   const kpis=`<div class="stat-row">
-    <div class="stat"${kt("all")}><div class="n">${data.length}</div><div class="l">Total tickets</div></div>
-    <div class="stat accent"${kt("Pending")}><div class="n">${c("Pending")}</div><div class="l">Pending</div></div>
-    <div class="stat accent"${kt("In Progress")}><div class="n">${c("In Progress")}</div><div class="l">In Progress</div></div>
-    <div class="stat accent"${kt("Testing")}><div class="n">${c("Testing")}</div><div class="l">Testing</div></div>
-    <div class="stat"${kt("Closed")}><div class="n">${c("Closed")}</div><div class="l">Closed</div></div>
+    <div class="stat"><div class="n">${data.length}</div><div class="l">Total tickets</div></div>
+    <div class="stat accent"><div class="n">${c("Pending")}</div><div class="l">Pending</div></div>
+    <div class="stat accent"><div class="n">${c("In Progress")}</div><div class="l">In Progress</div></div>
+    <div class="stat accent"><div class="n">${c("Testing")}</div><div class="l">Testing</div></div>
+    <div class="stat"><div class="n">${c("Closed")}</div><div class="l">Closed</div></div>
     <div class="stat ${data.filter(isOverdue).length?'alert':''}"><div class="n">${avg==null?'—':avg.toFixed(1)+'j'}</div><div class="l">Tps moyen résol.</div></div>
   </div>`;
   const charts=`<div class="two-col">
@@ -1719,6 +1732,62 @@ async function fetchUnseenMentions(){
   try{ const { count } = await sb.from("mentions").select("id",{count:'exact',head:true}).eq("user_id",uid()).eq("seen",false); state.unseenMentions=count||0; }
   catch(_){ state.unseenMentions=0; }
 }
+
+// =========================== NOTIFICATIONS & RAFRAÎCHISSEMENT SILENCIEUX ===========================
+// Toast non bloquant, cliquable, disparaît seul.
+function showToast(title, body, view){
+  let box=document.getElementById("toasts");
+  if(!box){ box=document.createElement("div"); box.id="toasts"; document.body.appendChild(box); }
+  const t=document.createElement("div"); t.className="toast";
+  t.innerHTML=`<div class="tt">${esc(title)}</div>${body?`<div class="tb">${esc(body)}</div>`:""}`;
+  t.addEventListener("click",()=>{ if(view && !isMonitor()){ state.view=view; state.myOpenTicketId=null; state.myOpenActivityId=null; state.myTasksLoaded=false; render(); } t.remove(); });
+  box.appendChild(t);
+  setTimeout(()=>{ try{ t.remove(); }catch(_){ } }, 9000);
+}
+// Protection de saisie : on ne redessine JAMAIS l'écran si l'utilisateur est en train d'écrire
+// ou si un champ libre contient du texte non enregistré (hors filtres, restaurés depuis l'état).
+function renderIsSafe(){
+  const ae=document.activeElement;
+  if(ae && ["INPUT","TEXTAREA","SELECT"].includes(ae.tagName)) return false;
+  const fields=document.querySelectorAll('input[type="text"],input[type="date"],input[type="number"],input[type="email"],input[type="password"],textarea');
+  for(const f of fields){
+    if(!f.readOnly && f.value && f.value.trim()!==""){
+      if(!f.id || !/^(f-|af-|pj-|act-f-|cf$|ct$)/.test(f.id)) return false; // filtres = sans risque
+    }
+  }
+  return true;
+}
+// Boucle d'arrière-plan (60 s) : données fraîches sans impacter le travail en cours.
+let bgTimer=null, bgPrevAssigned=null;
+function myOpenAssignedSet(){ return new Set((state.tickets||[]).filter(t=>t.assignee_id===uid() && t.status!=="Closed").map(t=>t.id)); }
+function ensureBgTimer(){ if(bgTimer || isMonitor()) return; bgTimer=setInterval(()=>{ bgTick().catch(()=>{}); }, 60000); }
+async function bgTick(){
+  if(!state.session || isMonitor() || state.booting) return;
+  const prevUnseen=state.unseenMentions||0;
+  const [tk]=await Promise.all([ fetchTickets(), fetchUnseenMentions() ]);
+  state.tickets=tk;
+  if(state.activitiesLoaded){
+    try{ const r=await sb.from("service_activities").select("*, department:department_id(name), assignee:assignee_id(full_name)").order("created_at",{ascending:false}); state.activities=r.data||[]; }catch(_){}
+  }
+  // Nouvelle affectation de ticket → toast
+  const mine=myOpenAssignedSet();
+  if(bgPrevAssigned){
+    const news=[...mine].filter(id=>!bgPrevAssigned.has(id));
+    if(news.length){
+      const t=(state.tickets||[]).find(x=>x.id===news[0]);
+      showToast("Nouveau ticket affecté", news.length>1 ? `${news.length} tickets viennent de vous être affectés` : (t?`${t.ticket_no||""} — ${t.subject}`:""), "mytasks");
+      state.myTasksLoaded=false;
+    }
+  }
+  bgPrevAssigned=mine;
+  // Nouvelle mention (tag) → toast
+  if((state.unseenMentions||0)>prevUnseen){
+    showToast("Nouvelle notification", "Vous avez été tagué·e — cliquez pour ouvrir « Mes tâches »", "mytasks");
+    state.myTasksLoaded=false;
+  }
+  state.lastSync=Date.now();
+  if(renderIsSafe()) render(); // sinon : données à jour en mémoire, écran redessiné à la prochaine action
+}
 async function loadMyTasks(){
   const me=uid();
   const { data: mnts } = await sb.from("mentions").select("*").eq("user_id",me).order("created_at",{ascending:false});
@@ -2464,12 +2533,6 @@ async function onAction(e){
   if(action==="mt-open-ticket"){ state.myOpenTicketId=el.dataset.id; render(); await loadActivity(el.dataset.id); return; }
   if(action==="mt-open-activity"){ state.myOpenActivityId=el.dataset.id; state.activityComments=[]; render(); await loadActivityComments(el.dataset.id); return; }
   if(action==="mt-back"){ state.myOpenTicketId=null; state.myOpenActivityId=null; render(); return; }
-  if(action==="kpi-tickets"){
-    const st=el.dataset.status||"all";
-    state.filter={ status:st, service:"all", priority:"all", search:"" };
-    state.view="tickets"; state.selectedTicketId=null; state.showNewForm=false;
-    render(); return;
-  }
   if(action==="logout"){ if(monDataTimer){clearInterval(monDataTimer);monDataTimer=null;} if(monClockTimer){clearInterval(monClockTimer);monClockTimer=null;} await sb.auth.signOut(); state.session=null; state.profile=null; state.view="dashboard"; render(); return; }
   if(action==="retry"){ state.booting=true; render(); await afterLogin(); return; }
   if(action==="goto-new"){ state.view="tickets"; state.selectedTicketId=null; state.staffNew=true; if(!state.newService) state.newService=getServices()[0]; render(); return; }
