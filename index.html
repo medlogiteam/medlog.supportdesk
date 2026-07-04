@@ -361,8 +361,9 @@ let monDataTimer=null, monClockTimer=null, monReloadTimer=null;
 let monBannerSig=null;
 function viewerAnnSig(){ try{ return JSON.stringify(announcementsForViewer().map(a=>[a.id,a.title,a.body,a.audience,a.is_active])); }catch(e){ return ""; } }
 async function monRefresh(){
-  const [tk, an] = await Promise.all([ fetchTickets(), fetchAnnouncements() ]);
-  state.tickets=tk; state.announcements=an; state.lastSync=Date.now();
+  const [tk, an, ac] = await Promise.all([ fetchTickets(), fetchAnnouncements(),
+    sb.from("service_activities").select("*, department:department_id(name), assignee:assignee_id(full_name)").order("created_at",{ascending:false}).then(r=>r.data||[]).catch(()=>[]) ]);
+  state.tickets=tk; state.announcements=an; state.activities=ac; state.activitiesLoaded=true; state.lastSync=Date.now();
   if(state.view==="monitor"){
     const dyn=document.getElementById("mon-dynamic");
     if(!dyn){ render(); return; }
@@ -420,7 +421,7 @@ async function afterLogin(){
   // Mur d'écran : restaurer l'onglet courant après un rechargement complet (mémorisé dans l'URL).
   if(isMonitor()){
     const h=(location.hash||"").replace("#","");
-    state.view = ["monitor","report","announces"].includes(h) ? h : "monitor";
+    state.view = ["monitor","report","announces","services"].includes(h) ? h : "monitor";
   }
   // Écran d'accueil : pour un non-admin, le premier écran autorisé par son groupe.
   if(state.profile && !isMonitor() && !isAdmin()){
@@ -483,6 +484,7 @@ function renderHeader(){
   if(state.profile && isMonitor()){
     nav=`<div class="topnav">
       <button data-action="mon-nav" data-view="monitor" class="${state.view==='monitor'?'active':''}">Monitoring</button>
+      <button data-action="mon-nav" data-view="services" class="${state.view==='services'?'active':''}">Services</button>
       <button data-action="mon-nav" data-view="report" class="${state.view==='report'?'active':''}">Rapport</button>
       <button data-action="mon-nav" data-view="announces" class="${state.view==='announces'?'active':''}">Annonces</button></div>`;
     session=`<div class="session-info"><span id="mon-clock" class="role-chip" style="font-family:var(--mono);">${new Date().toLocaleTimeString("fr-FR")}</span>
@@ -535,7 +537,7 @@ function renderMain(){
   if(state.booting) return `<div class="gate"><h1>Chargement…</h1><p>Connexion à la base sécurisée.</p></div>`;
   if(!state.session || !state.profile) return renderLogin();
   if(state.loadError) return `<div class="gate"><h1>Erreur de chargement</h1><div class="card"><div class="error-msg">${esc(state.loadError)}</div><button class="btn" data-action="retry" style="margin-top:12px;">Réessayer</button></div></div>`;
-  if(isMonitor()) return state.view==="report" ? renderReport() : state.view==="announces" ? renderMonitorAnnonces() : renderMonitor();
+  if(isMonitor()) return state.view==="report" ? renderReport() : state.view==="announces" ? renderMonitorAnnonces() : state.view==="services" ? renderMonitorServices() : renderMonitor();
   // Étape 2 — accès piloté par les groupes (l'admin a toujours accès complet).
   const navg=navGroups();
   const allowed=navg.flatMap(g=>g.leaves.filter(lf=>lf.show()).map(lf=>lf.v));
@@ -616,12 +618,14 @@ function renderDashboard(){
   const periodSelect=`<select id="dash-period">${periods.map(([v,l])=>`<option value="${v}" ${state.dashPeriod===v?'selected':''}>${l}</option>`).join("")}</select>`;
   const customRange=state.dashPeriod==="custom"?`<div class="field" style="margin-bottom:0;"><label>Du</label><input type="date" id="cf" value="${esc(state.customFrom)}"></div><div class="field" style="margin-bottom:0;"><label>Au</label><input type="date" id="ct" value="${esc(state.customTo)}"></div>`:"";
   const avg=avgResolution(data);
+  const clk=canViewTickets();
+  const kt=(st)=> clk?` data-action="kpi-tickets" data-status="${st}" style="cursor:pointer;" title="Voir ces tickets"`:``;
   const kpis=`<div class="stat-row">
-    <div class="stat"><div class="n">${data.length}</div><div class="l">Total tickets</div></div>
-    <div class="stat accent"><div class="n">${c("Pending")}</div><div class="l">Pending</div></div>
-    <div class="stat accent"><div class="n">${c("In Progress")}</div><div class="l">In Progress</div></div>
-    <div class="stat accent"><div class="n">${c("Testing")}</div><div class="l">Testing</div></div>
-    <div class="stat"><div class="n">${c("Closed")}</div><div class="l">Closed</div></div>
+    <div class="stat"${kt("all")}><div class="n">${data.length}</div><div class="l">Total tickets</div></div>
+    <div class="stat accent"${kt("Pending")}><div class="n">${c("Pending")}</div><div class="l">Pending</div></div>
+    <div class="stat accent"${kt("In Progress")}><div class="n">${c("In Progress")}</div><div class="l">In Progress</div></div>
+    <div class="stat accent"${kt("Testing")}><div class="n">${c("Testing")}</div><div class="l">Testing</div></div>
+    <div class="stat"${kt("Closed")}><div class="n">${c("Closed")}</div><div class="l">Closed</div></div>
     <div class="stat ${data.filter(isOverdue).length?'alert':''}"><div class="n">${avg==null?'—':avg.toFixed(1)+'j'}</div><div class="l">Tps moyen résol.</div></div>
   </div>`;
   const charts=`<div class="two-col">
@@ -648,15 +652,16 @@ function barList(items){ if(!items.length) return `<div class="empty-state">Aucu
 async function loadExec(){
   try{
     const soon=new Date(); soon.setDate(soon.getDate()+settingNum("warranty_warning_days")); const soonISO=soon.toISOString().slice(0,10); const todayISO=new Date().toISOString().slice(0,10);
-    const [assets, stock, prs, pos, projects] = await Promise.all([
+    const [assets, stock, prs, pos, projects, acts] = await Promise.all([
       sb.from("assets").select("id,name,asset_tag,status,warranty_expiry,assigned_user_id"),
       sb.from("stock_items").select("id,name,quantity,min_threshold,unit").eq("is_active",true),
       sb.from("purchase_requests").select("id,status,estimated_cost"),
       sb.from("purchase_orders").select("id,po_no,status,amount"),
-      sb.from("projects").select("id,project_no,name,status,progress_pct,end_date")
+      sb.from("projects").select("id,project_no,name,status,progress_pct,end_date"),
+      sb.from("service_activities").select("id,title,status,due_date,created_at,department:department_id(name)").then(r=>r.data||[]).catch(()=>[])
     ]);
     state.execData={
-      assets:assets.data||[], stock:stock.data||[], prs:prs.data||[], pos:pos.data||[], projects:projects.data||[],
+      assets:assets.data||[], stock:stock.data||[], prs:prs.data||[], pos:pos.data||[], projects:projects.data||[], acts:acts||[],
       soonISO, todayISO
     };
     state.execLoaded=true; render();
@@ -682,6 +687,30 @@ function renderExec(){
   const section=(title,tiles)=>`<div class="card" style="margin-bottom:16px;"><div class="section-label">${title}</div><div class="stat-row">${tiles}</div></div>`;
   const tile=(n,l,cls="")=>`<div class="stat ${cls}"><div class="n">${n}</div><div class="l">${l}</div></div>`;
 
+  // --- Discipline d'exécution : conformité SLA + vieillissement du travail ouvert ---
+  const monthWin=(off)=>{ const now=new Date(); const a=new Date(now.getFullYear(),now.getMonth()+off,1); const b=new Date(now.getFullYear(),now.getMonth()+off+1,1); return [a.getTime(),b.getTime()]; };
+  const slaPct=(win)=>{ const done=tk.filter(t=>t.closed_at && (()=>{const ms=new Date(t.closed_at).getTime(); return ms>=win[0]&&ms<win[1];})()); if(!done.length) return null;
+    const ok=done.filter(t=>((new Date(t.closed_at)-new Date(t.created_at))/3600000) <= slaHours(t)).length; return Math.round(ok/done.length*100); };
+  const slaCur=slaPct(monthWin(0)), slaPrev=slaPct(monthWin(-1));
+  const trend = (slaCur!=null && slaPrev!=null) ? (slaCur>slaPrev?` ▲ (vs ${slaPrev}%)`:slaCur<slaPrev?` ▼ (vs ${slaPrev}%)`:` = (vs ${slaPrev}%)`) : "";
+  const openTk=tk.filter(t=>t.status!=="Closed");
+  const ageD=t=>(Date.now()-new Date(t.created_at).getTime())/86400000;
+  const o7=openTk.filter(t=>ageD(t)>7).length, o14=openTk.filter(t=>ageD(t)>14).length, o30=openTk.filter(t=>ageD(t)>30).length;
+  const acts=d.acts||[];
+  const openActs=acts.filter(a=>a.status!=="Terminé");
+  const actBlocked=openActs.filter(a=>a.status==="Bloqué").length;
+  const actOverdue=openActs.filter(a=>a.due_date && a.due_date<d.todayISO).length;
+  const slaTile=`<div class="stat ${slaCur!=null&&slaCur<80?"alert":"accent"}"><div class="n">${slaCur==null?"—":slaCur+"%"}</div><div class="l">Conformité SLA (mois)${trend?` ${trend.trim()}`:""}</div></div>`;
+  const disciplineSec=section("Discipline d'exécution — SLA & vieillissement", [
+    slaTile,
+    tile(o7,"Ouverts > 7 j", o7?"accent":""),
+    tile(o14,"Ouverts > 14 j", o14?"alert":""),
+    tile(o30,"Ouverts > 30 j", o30?"alert":""),
+    tile(actBlocked,"Activités bloquées", actBlocked?"alert":""),
+    tile(actOverdue,"Activités échues", actOverdue?"alert":"")
+  ].join(""));
+  const agingBySvc=(()=>{const m={}; openTk.filter(t=>ageD(t)>14).forEach(t=>{const k=t.service||"—"; m[k]=(m[k]||0)+1;}); return Object.keys(m).map(k=>({label:k,count:m[k]})).sort((a,b)=>b.count-a.count);})();
+
   const ticketsSec=section("Support Desk", [
     tile(tk.length,"Tickets (total)"), tile(tkOpen,"Ouverts","accent"),
     tile(tkOver,"En retard", tkOver?"alert":""), tile(tk.filter(t=>t.service==="MEDLOGIX"&&t.status!=="Closed").length,"MEDLOGIX ouverts")
@@ -705,14 +734,18 @@ function renderExec(){
 
   const charts=`<div class="two-col">
     <div class="card"><div class="section-label">Tickets par statut</div>${barList(groupCount(tk,t=>t.status))}</div>
-    <div class="card"><div class="section-label">Actifs par statut</div>${barList(groupCount(d.assets,a=>assetStatusLabel(a.status)))}</div>
+    <div class="card"><div class="section-label">Travail ouvert > 14 j par service</div>${barList(agingBySvc)}</div>
   </div><div class="two-col">
+    <div class="card"><div class="section-label">Actifs par statut</div>${barList(groupCount(d.assets,a=>assetStatusLabel(a.status)))}</div>
     <div class="card"><div class="section-label">Commandes par statut</div>${barList(groupCount(d.pos,p=>({open:"Ouverte",partial:"Partielle",received:"Reçue",cancelled:"Annulée"}[p.status]||p.status)))}</div>
+  </div><div class="two-col">
     <div class="card"><div class="section-label">Projets par statut</div>${barList(groupCount(d.projects,p=>projectStatusLabel(p.status)))}</div>
+    <div class="card"><div class="section-label">Activités ouvertes par service</div>${barList((()=>{const m={};openActs.forEach(a=>{const k=a.department?a.department.name:"—";m[k]=(m[k]||0)+1;});return Object.keys(m).map(k=>({label:k,count:m[k]})).sort((a,b)=>b.count-a.count);})())}</div>
   </div>`;
 
   return `<h1 class="page-title">Tableau de bord — Direction</h1><p class="page-sub">Vue consolidée de l'exploitation IT, tous modules. <button class="link" data-action="exec-refresh">actualiser</button></p>
     ${renderExecAlerts(d)}
+    ${disciplineSec}
     ${ticketsSec}${assetsSec}${stockSec}${procSec}${projSec}
     <h2 class="page-sub" style="margin-top:8px;font-weight:600;">Répartitions</h2>
     ${charts}`;
@@ -2147,6 +2180,35 @@ function monDynamicHtml(){
   return `${kpis}<div class="mon-grid"><div>${mainPanel}</div><div>${sidePanel}</div></div><div class="mon-foot"><span>Dernière synchro : ${state.lastSync?new Date(state.lastSync).toLocaleTimeString("fr-FR"):"—"} · actualisation auto 10 s · rechargement complet 5 min<span id="mon-sync"></span></span><span>${ml.length} tickets MEDLOGIX au total · ${ml.filter(t=>t.status==="Closed").length} clos</span></div>`;
 }
 
+// Onglet Services du mur d'écran : suivi des activités par service, en lecture seule.
+function renderMonitorServices(){
+  const acts=state.activities||[];
+  const open=acts.filter(a=>a.status!=="Terminé");
+  const todayISO=new Date().toISOString().slice(0,10);
+  const actOver=a=>a.status!=="Terminé" && a.due_date && a.due_date<todayISO;
+  const cnt=s=>acts.filter(a=>a.status===s).length;
+  const kpis=`<div class="mon-kpis">
+    <div class="mon-kpi"><div class="n">${open.length}</div><div class="l">Activités ouvertes</div></div>
+    <div class="mon-kpi blue"><div class="n">${cnt("En cours")}</div><div class="l">En cours</div></div>
+    <div class="mon-kpi amber"><div class="n">${cnt("À faire")}</div><div class="l">À faire</div></div>
+    <div class="mon-kpi red"><div class="n">${cnt("Bloqué")}</div><div class="l">Bloqué</div></div>
+    <div class="mon-kpi red"><div class="n">${open.filter(actOver).length}</div><div class="l">Échéance dépassée</div></div>
+    <div class="mon-kpi violet"><div class="n">${cnt("Terminé")}</div><div class="l">Terminé</div></div></div>`;
+  const sorted=open.slice().sort((a,b)=>{
+    const r=s=>s==="Bloqué"?0:s==="En cours"?1:2;
+    const ov=x=>actOver(x)?0:1;
+    return ov(a)-ov(b) || r(a.status)-r(b.status) || String(a.due_date||"9999").localeCompare(String(b.due_date||"9999"));
+  });
+  const rows=sorted.slice(0,14).map(a=>{
+    const over=actOver(a);
+    return `<tr><td class="mon-subj">${esc(a.title)}</td><td style="color:#9fb3d1;font-size:12.5px;">${a.department?esc(a.department.name):"—"}</td><td>${a.priority?`<span class="badge priority-${a.priority}">${esc(a.priority)}</span>`:"—"}</td><td><span class="badge" style="background:${actColor(a.status)}33;color:${actColor(a.status)==='#8A99AC'?'#c2cfe0':actColor(a.status)};">${esc(a.status)}</span></td><td style="color:#9fb3d1;font-size:12.5px;">${a.assignee?esc(a.assignee.full_name||""):"—"}</td><td class="mon-age ${over?'over':''}">${a.due_date?esc(a.due_date):"—"}</td></tr>`;
+  }).join("");
+  const mainPanel=`<div class="mon-panel"><h3>Activités à traiter (${open.length}) — bloquées et échues en tête</h3>${open.length?`<table class="mon-table"><thead><tr><th>Activité</th><th>Service</th><th>Priorité</th><th>Statut</th><th>Responsable</th><th>Échéance</th></tr></thead><tbody>${rows}</tbody></table>`:`<div style="color:#7e93b3;padding:24px 0;text-align:center;">Aucune activité ouverte. 🎉</div>`}</div>`;
+  const bySvc=(()=>{const m={};open.forEach(a=>{const k=a.department?a.department.name:"—";m[k]=(m[k]||0)+1;});return Object.keys(m).map(k=>({label:k,count:m[k]})).sort((a,b)=>b.count-a.count);})();
+  const blocked=open.filter(a=>a.status==="Bloqué");
+  const sidePanel=`<div class="mon-panel"><h3>Activités ouvertes par service</h3>${monBars(bySvc)}</div><div class="mon-panel"><h3>Points de blocage (${blocked.length})</h3>${blocked.length?blocked.slice(0,6).map(a=>`<div style="padding:7px 0;border-bottom:1px solid #20304a;font-size:13px;color:#d7e2f0;">${esc(a.title)} <span style="color:#7e93b3;">· ${a.department?esc(a.department.name):"—"}</span></div>`).join(""):`<div style="color:#7e93b3;font-size:12.5px;">Aucun blocage signalé.</div>`}</div>`;
+  return `<div class="mon"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px;flex-wrap:wrap;gap:8px;"><div style="font-size:20px;font-weight:800;">Suivi par service — activités & actions</div><div style="font-size:12px;color:#7e93b3;">Supervision en lecture seule</div></div>${kpis}<div class="mon-grid"><div>${mainPanel}</div><div>${sidePanel}</div></div><div class="mon-foot"><span>Dernière synchro : ${state.lastSync?new Date(state.lastSync).toLocaleTimeString("fr-FR"):"—"} · actualisation auto 10 s</span><span>${acts.length} activité(s) au total</span></div></div>`;
+}
 // Onglet Annonces du mur d'écran : liste en lecture seule des annonces ciblant l'écran.
 function renderMonitorAnnonces(){
   const list=announcementsForViewer();
@@ -2402,6 +2464,12 @@ async function onAction(e){
   if(action==="mt-open-ticket"){ state.myOpenTicketId=el.dataset.id; render(); await loadActivity(el.dataset.id); return; }
   if(action==="mt-open-activity"){ state.myOpenActivityId=el.dataset.id; state.activityComments=[]; render(); await loadActivityComments(el.dataset.id); return; }
   if(action==="mt-back"){ state.myOpenTicketId=null; state.myOpenActivityId=null; render(); return; }
+  if(action==="kpi-tickets"){
+    const st=el.dataset.status||"all";
+    state.filter={ status:st, service:"all", priority:"all", search:"" };
+    state.view="tickets"; state.selectedTicketId=null; state.showNewForm=false;
+    render(); return;
+  }
   if(action==="logout"){ if(monDataTimer){clearInterval(monDataTimer);monDataTimer=null;} if(monClockTimer){clearInterval(monClockTimer);monClockTimer=null;} await sb.auth.signOut(); state.session=null; state.profile=null; state.view="dashboard"; render(); return; }
   if(action==="retry"){ state.booting=true; render(); await afterLogin(); return; }
   if(action==="goto-new"){ state.view="tickets"; state.selectedTicketId=null; state.staffNew=true; if(!state.newService) state.newService=getServices()[0]; render(); return; }
