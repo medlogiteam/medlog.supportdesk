@@ -24,7 +24,7 @@
   button,input,select,textarea{font-family:inherit;}
   :focus-visible{outline:2px solid var(--brand-2); outline-offset:2px;}
   #app{min-height:100vh; display:flex; flex-direction:column;}
-  header.topbar{background:var(--brand); color:#fff; padding:12px 24px; display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; border-bottom:3px solid var(--gold);}
+  header.topbar{background:var(--brand); color:#fff; padding:12px 24px; display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; border-bottom:3px solid var(--gold); position:sticky; top:0; z-index:900; box-shadow:0 2px 10px rgba(15,30,55,.25);}
   .brand{display:flex; align-items:center; gap:10px;}
   .brand .mark{width:34px; height:34px; border-radius:7px; background:var(--brand-2); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px;}
   .brand .name{font-weight:700; font-size:16px;}
@@ -61,7 +61,7 @@
   .btn.tiny{padding:6px 11px; font-size:12px;}
   .btn:disabled{opacity:.5; cursor:not-allowed;}
   .btn-row{display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
-  .subnav{display:flex; gap:18px; margin-bottom:18px; border-bottom:1px solid var(--border);}
+  .subnav{display:flex; gap:18px; margin-bottom:18px; border-bottom:1px solid var(--border); position:sticky; top:var(--topbar-h, 62px); z-index:850; background:var(--bg); padding-top:4px;}
   .subnav button{background:none; border:none; padding:10px 2px; font-size:13.5px; font-weight:600; color:var(--ink-soft); cursor:pointer; border-bottom:2px solid transparent; position:relative; top:1px;}
   .subnav button.active{color:var(--brand); border-bottom-color:var(--brand-2);}
   .badge{display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:700; padding:4px 9px; border-radius:20px; white-space:nowrap;}
@@ -342,7 +342,10 @@ function render(){
   try{ ensureMonitorTimers(); }catch(e){}
   try{ bindEvents(); }catch(e){}
   try{ applyBannerSpeed(); }catch(e){}
+  try{ const hd=document.querySelector("header.topbar"); if(hd) document.documentElement.style.setProperty("--topbar-h", hd.offsetHeight+"px"); }catch(e){}
 }
+// Barres fixes : recalcul de la hauteur d'en-tête quand la fenêtre change de taille.
+window.addEventListener("resize", ()=>{ try{ const hd=document.querySelector("header.topbar"); if(hd) document.documentElement.style.setProperty("--topbar-h", hd.offsetHeight+"px"); }catch(e){} });
 // Mur d'écran 24/7 : quand l'onglet/écran redevient visible, on force une actualisation
 // et on relance les minuteurs (les navigateurs throttlent les onglets en arrière-plan).
 document.addEventListener("visibilitychange", ()=>{
