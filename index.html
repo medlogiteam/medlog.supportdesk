@@ -443,6 +443,7 @@ async function afterLogin(){
   // Notifications & rafraîchissement silencieux (utilisateurs connectés, hors mur d'écran).
   if(!isMonitor()){
     bgPrevAssigned=myOpenAssignedSet();
+    bgPrevMyReq=myRequestedStatusMap();
     ensureBgTimer();
     if((state.unseenMentions||0)>0){
       const n=state.unseenMentions;
@@ -1764,8 +1765,9 @@ function renderIsSafe(){
   return true;
 }
 // Boucle d'arrière-plan (60 s) : données fraîches sans impacter le travail en cours.
-let bgTimer=null, bgPrevAssigned=null;
+let bgTimer=null, bgPrevAssigned=null, bgPrevMyReq=null;
 function myOpenAssignedSet(){ return new Set((state.tickets||[]).filter(t=>t.assignee_id===uid() && t.status!=="Closed").map(t=>t.id)); }
+function myRequestedStatusMap(){ const m={}; (state.tickets||[]).filter(t=>t.requester_id===uid()).forEach(t=>{ m[t.id]=t.status; }); return m; }
 function ensureBgTimer(){ if(bgTimer || isMonitor()) return; bgTimer=setInterval(()=>{ bgTick().catch(()=>{}); }, 60000); }
 async function bgTick(){
   if(!state.session || isMonitor() || state.booting) return;
@@ -1786,6 +1788,18 @@ async function bgTick(){
     }
   }
   bgPrevAssigned=mine;
+  // Changement de statut sur MES demandes → toast
+  const reqNow=myRequestedStatusMap();
+  if(bgPrevMyReq){
+    for(const tid of Object.keys(reqNow)){
+      if(bgPrevMyReq[tid] && bgPrevMyReq[tid]!==reqNow[tid]){
+        const t=(state.tickets||[]).find(x=>x.id===tid);
+        if(t) showToast("Votre ticket a été mis à jour", `${t.ticket_no||""} — nouveau statut : ${reqNow[tid]}`, "mytasks");
+        break; // un toast par cycle suffit
+      }
+    }
+  }
+  bgPrevMyReq=reqNow;
   // Nouvelle mention (tag) → toast
   if((state.unseenMentions||0)>prevUnseen){
     showToast("Nouvelle notification", "Vous avez été tagué·e — cliquez pour ouvrir « Mes tâches »", "mytasks");
@@ -2706,9 +2720,13 @@ async function onAction(e){
     try{
       if(action==="user-comment"){ await sb.from("ticket_activity").insert({ticket_id:id, actor_id:uid(), type:"comment", comment}); }
       else if(action==="staff-update"){
-        const status=document.getElementById("staff-status").value; const old=getTicket(id).status;
+        const status=document.getElementById("staff-status").value; const t0=getTicket(id); const old=t0.status;
         await sb.from("tickets").update({ status, closed_at: status==="Closed"?new Date().toISOString():null }).eq("id",id);
         await sb.from("ticket_activity").insert({ticket_id:id, actor_id:uid(), type:"status", from_value:old, to_value:status, comment});
+        // Notification du demandeur (e-mail) — sauf s'il est l'auteur de la mise à jour.
+        if(t0.requester_id && t0.requester_id!==uid()){
+          try{ await sb.functions.invoke("notify-user", { body:{ kind:"ticket_update", recipient_id:t0.requester_id, ticket_no:t0.ticket_no, subject:t0.subject, new_status:(status!==old?status:null), message:comment, tagger_name:myName() } }); }catch(_){}
+        }
       } else {
         const old=getTicket(id).status;
         await sb.from("tickets").update({ status:"Reopened", closed_at:null }).eq("id",id);
