@@ -222,7 +222,7 @@ let state = {
   pos:[], vendors:[], vendorsLoaded:false, procSubview:"requests", selectedPoId:null, poItems:[],
   poReceipts:[], receivedByItem:{}, poReceiving:false,
   projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[],
-  projectsSubview:"projects", activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
+  projectsSubview:"projects", projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
   myTickets:[], myActivities:[], myTasksLoaded:false, myOpenTicketId:null, myOpenActivityId:null, unseenMentions:0,
   execLoaded:false, execData:null,
   reportSource:"tickets", reportFilters:{}, reportRows:null, reportRunning:false, reportError:null,
@@ -264,6 +264,8 @@ function canViewProcurement(){ return can("procurement","view"); }
 function canCreatePr(){ return can("procurement","create"); }
 function canViewProjects(){ return can("projects","view"); }
 function canManageProjects(){ return canWrite("projects"); }
+function canViewActivities(){ return can("activities","view"); }
+function canManageActivities(){ return canWrite("activities"); }
 function canViewExec(){ return can("exec","view"); }
 function canViewReports(){ return can("reports","view"); }
 function canViewDashboard(){ return isAdmin() || can("dashboard","view"); }
@@ -300,6 +302,7 @@ const SCREENS = [
   {key:"stock",       label:"Stock"},
   {key:"procurement", label:"Achats"},
   {key:"projects",    label:"Projets"},
+  {key:"activities",  label:"Suivi par service"},
   {key:"maintenance", label:"Maintenance (administration)"},
 ];
 const PERM_ACTIONS = [["view","Voir"],["create","Créer"],["edit","Modifier"],["delete","Supprimer"]];
@@ -540,7 +543,7 @@ function navGroups(){
         {v:"assets", l:"Actifs", show:()=>canViewAssets()},
         {v:"stock", l:"Stock", show:()=>canViewStock()},
         {v:"procurement", l:"Achats", show:()=>canViewProcurement()} ] },
-    { key:"projects", label:"Projets", leaves:[ {v:"projects", l:"Projets", show:()=>canViewProjects()} ] },
+    { key:"projects", label:"Projets", leaves:[ {v:"projects", l:"Projets", show:()=>canViewProjects()||canViewActivities()} ] },
     { key:"maint", label:"Maintenance", leaves:[ {v:"maintenance", l:"Maintenance", show:()=>isAdmin()} ] },
   ].filter(g=> g.leaves.some(lf=>lf.show()));
 }
@@ -573,7 +576,7 @@ function renderMain(){
   if(state.view==="assets") return canViewAssets()?sub+renderAssetsArea():"";
   if(state.view==="stock") return canViewStock()?sub+renderStockArea():"";
   if(state.view==="procurement") return canViewProcurement()?sub+renderProcurementArea():"";
-  if(state.view==="projects") return canViewProjects()?renderProjectsArea():"";
+  if(state.view==="projects") return (canViewProjects()||canViewActivities())?renderProjectsArea():"";
   if(state.view==="maintenance") return isAdmin()?renderMaintenance():"";
   return "";
 }
@@ -1657,7 +1660,7 @@ function renderActivitiesArea(){
   if(f.department!=="all") list=list.filter(a=>a.department_id===f.department);
   if(f.status!=="all") list=list.filter(a=>a.status===f.status);
   if((f.search||"").trim()){ const q=f.search.toLowerCase(); list=list.filter(a=>(a.title||"").toLowerCase().includes(q)); }
-  const newBtn=canManageProjects()?`<button class="btn secondary" data-action="act-new">+ Nouvelle activité</button>`:"";
+  const newBtn=canManageActivities()?`<button class="btn secondary" data-action="act-new">+ Nouvelle activité</button>`:"";
   const rows=list.map(a=>`<div class="ticket-row" data-action="open-activity" data-id="${a.id}">
     <div class="col-main"><div class="subject">${esc(a.title)}</div>
       <div class="meta"><span class="badge svc">${a.department?esc(a.department.name):"—"}</span>${a.assignee?`<span>${esc(a.assignee.full_name)}</span>`:""}${a.due_date?`<span>Échéance ${esc(a.due_date)}</span>`:""}</div></div>
@@ -1702,7 +1705,7 @@ function renderActivityForm(){
       <button class="btn" data-action="save-activity">Créer l'activité</button></div>`;
 }
 function renderActivityDetail(a){
-  const canEdit=canManageProjects();
+  const canEdit=canManageActivities() || a.assignee_id===uid();
   const userOpts=`<option value="">— choisir un utilisateur —</option>`+(state.profilesList||[]).map(u=>`<option value="${u.id}">${esc(u.full_name||u.email)}</option>`).join("");
   const comments=(state.activityComments||[]).map(c=>`<div style="padding:8px 0;border-bottom:1px solid var(--border);"><div style="font-size:12px;color:var(--ink-soft);">${esc(c.author?c.author.full_name:'—')} · ${fmtDate(c.created_at)}</div><div style="font-size:13.5px;white-space:pre-wrap;">${esc(c.body)}</div></div>`).join("")||`<div class="hint" style="font-size:12px;">Aucun commentaire.</div>`;
   const delBtn = isAdmin()?`<button class="btn danger" data-action="del-activity" data-id="${a.id}">Supprimer</button>`:"";
@@ -1799,12 +1802,14 @@ async function loadMyTasks(){
   const aIds=[...new Set(mentions.filter(m=>m.subject_type==='activity').map(m=>m.subject_id))];
   const tSel="*, requester:requester_id(full_name), assignee:assignee_id(full_name)";
   const aSel="*, department:department_id(name), assignee:assignee_id(full_name)";
-  const [tA, tT, aA, aT] = await Promise.all([
+  const [tA, tT, aA, aT, pT] = await Promise.all([
     sb.from("tickets").select(tSel).eq("assignee_id",me),
     tIds.length?sb.from("tickets").select(tSel).in("id",tIds):Promise.resolve({data:[]}),
     sb.from("service_activities").select(aSel).eq("assignee_id",me),
-    aIds.length?sb.from("service_activities").select(aSel).in("id",aIds):Promise.resolve({data:[]})
+    aIds.length?sb.from("service_activities").select(aSel).in("id",aIds):Promise.resolve({data:[]}),
+    sb.from("project_tasks").select("*, project:project_id(name,project_no)").eq("assignee_id",me).neq("status","Done").order("end_date",{ascending:true,nullsFirst:false})
   ]);
+  state.myProjTasks=pT.data||[];
   const tMap={}; [...(tA.data||[]),...(tT.data||[])].forEach(t=>tMap[t.id]=t); state.myTickets=Object.values(tMap);
   const aMap={}; [...(aA.data||[]),...(aT.data||[])].forEach(a=>aMap[a.id]=a); state.myActivities=Object.values(aMap);
   // Lien profond ticket : charger directement s'il n'est ni assigné ni tagué pour cette personne.
@@ -1835,19 +1840,52 @@ function renderMyTasks(){
   if(!state.myTasksLoaded){ loadMyTasks(); return `<div class="empty-state">Chargement de vos tâches…</div>`; }
   if(state.myOpenActivityId){ const a=state.myActivities.find(x=>x.id===state.myOpenActivityId); if(a) return `<button class="back-link" data-action="mt-back">&larr; Mes tâches</button>`+renderActivityDetail(a); state.myOpenActivityId=null; }
   if(state.myOpenTicketId){ const t=state.myTickets.find(x=>x.id===state.myOpenTicketId); if(t) return `<button class="back-link" data-action="mt-back">&larr; Mes tâches</button>`+renderTicketDetail(t); state.myOpenTicketId=null; }
+  if(state.myOpenTaskId){
+    const t=state.myProjTasks.find(x=>x.id===state.myOpenTaskId);
+    if(t){
+      const stOpts=TASK_STATUSES.map(([v,l])=>`<option value="${v}" ${t.status===v?'selected':''}>${l}</option>`).join("");
+      return `<button class="back-link" data-action="mt-back">&larr; Mes tâches</button>
+        <h1 class="page-title">${esc(t.name)}</h1>
+        <div class="card">
+          <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:12px;flex-wrap:wrap;">
+            <span>Projet : ${t.project?esc((t.project.project_no?t.project.project_no+" — ":"")+t.project.name):"(non partagé)"}</span>
+            ${t.start_date?`<span>${esc(t.start_date)} → ${esc(t.end_date||"?")}</span>`:""}
+          </div>
+          ${t.description?`<p style="margin-top:10px;white-space:pre-wrap;">${esc(t.description)}</p>`:""}
+          <div class="btn-row" style="margin-top:14px;flex-wrap:wrap;align-items:center;gap:8px;">
+            <span style="font-size:12px;color:var(--ink-soft);">Statut</span>
+            <select id="mt-tk-st" style="font-size:12px;padding:5px 7px;">${stOpts}</select>
+            <span style="font-size:12px;color:var(--ink-soft);">Avancement</span>
+            <input type="text" id="mt-tk-pg" value="${Number(t.progress_pct)||0}" style="width:58px;font-size:12px;padding:5px 7px;"><span style="font-size:12px;">%</span>
+            <button class="btn tiny" data-action="mt-task-save" data-id="${t.id}">Enregistrer</button>
+          </div><div id="mt-tk-err"></div>
+        </div>`;
+    }
+    state.myOpenTaskId=null;
+  }
   const meName=myName();
   const tRows=state.myTickets.map(t=>`<div class="ticket-row" data-action="mt-open-ticket" data-id="${t.id}"><div class="col-main"><div class="subject">${esc(t.subject)} <span class="ticket-id">${esc(t.ticket_no||"")}</span></div><div class="meta"><span class="badge svc">${esc(t.service||"")}</span><span>${t.assignee&&t.assignee.full_name===meName?'assigné à moi':'tagué'}</span></div></div><div class="col-status"><span class="badge ${statusClass(t.status)}">${esc(t.status)}</span></div></div>`).join("")||`<div class="empty-state">Aucun ticket.</div>`;
   const aRows=state.myActivities.map(a=>`<div class="ticket-row" data-action="mt-open-activity" data-id="${a.id}"><div class="col-main"><div class="subject">${esc(a.title)}</div><div class="meta"><span class="badge svc">${a.department?esc(a.department.name):"—"}</span><span>${a.assignee&&a.assignee.full_name===meName?'assigné à moi':'tagué'}</span></div></div><div class="col-status">${actBadge(a.status)}</div></div>`).join("")||`<div class="empty-state">Aucune activité.</div>`;
   return `<h1 class="page-title">Mes tâches</h1><p class="page-sub">Les tickets et activités qui vous sont assignés ou dans lesquels vous êtes tagué·e.</p>
     <div class="section-label">Tickets (${state.myTickets.length})</div><div class="ticket-list">${tRows}</div>
-    <div class="section-label" style="margin-top:20px;">Activités (${state.myActivities.length})</div><div class="ticket-list">${aRows}</div>`;
+    <div class="section-label" style="margin-top:20px;">Activités (${state.myActivities.length})</div><div class="ticket-list">${aRows}</div>
+    <div class="section-label" style="margin-top:20px;">Tâches de projet (${state.myProjTasks.length})</div><div class="ticket-list">${(state.myProjTasks||[]).map(t=>{
+      const late=t.end_date&&new Date(t.end_date)<new Date();
+      return `<div class="ticket-row" data-action="mt-open-task" data-id="${t.id}"><div class="col-main"><div class="subject">${esc(t.name)}</div><div class="meta"><span>${t.project?esc(t.project.name):"—"}</span>${t.end_date?`<span ${late?'style="color:var(--critical);font-weight:600;"':''}>échéance ${esc(t.end_date)}</span>`:""}</div></div><div class="col-status">${taskStatusBadge(t.status)}</div></div>`;
+    }).join("")||`<div class="empty-state">Aucune tâche de projet.</div>`}</div>`;
 }
 function renderProjectsArea(){
-  const sub=`<div class="subnav"><button data-action="proj-subview" data-view="projects" class="${state.projectsSubview!=='activities'?'active':''}">Projets</button><button data-action="proj-subview" data-view="activities" class="${state.projectsSubview==='activities'?'active':''}">Suivi par service</button></div>`;
+  const hasP=canViewProjects(), hasA=canViewActivities();
+  if(!hasP && state.projectsSubview!=="activities") state.projectsSubview="activities";
+  if(!hasA && state.projectsSubview==="activities") state.projectsSubview="projects";
+  const tabs=[ hasP?`<button data-action="proj-subview" data-view="projects" class="${state.projectsSubview!=='activities'?'active':''}">Projets</button>`:"",
+               hasA?`<button data-action="proj-subview" data-view="activities" class="${state.projectsSubview==='activities'?'active':''}">Suivi par service</button>`:"" ].join("");
+  const sub=`<div class="subnav">${tabs}</div>`;
   if(state.projectsSubview==="activities"){
+    if(!hasA) return sub+`<div class="empty-state">Accès non autorisé.</div>`;
     if(!state.activitiesLoaded){ loadActivities(); return sub+`<div class="empty-state">Chargement des activités…</div>`; }
     if(state.selectedActivityId){ const a=state.activities.find(x=>x.id===state.selectedActivityId); if(a) return sub+`<button class="back-link" data-action="act-back">&larr; Retour</button>`+renderActivityDetail(a); state.selectedActivityId=null; }
-    if(state.activityNew && canManageProjects()) return sub+`<button class="back-link" data-action="act-back">&larr; Retour</button>`+renderActivityForm();
+    if(state.activityNew && canManageActivities()) return sub+`<button class="back-link" data-action="act-back">&larr; Retour</button>`+renderActivityForm();
     return sub+renderActivitiesArea();
   }
   if(!state.projectsLoaded){ loadProjects(); return sub+`<div class="empty-state">Chargement des projets…</div>`; }
@@ -1910,7 +1948,19 @@ function renderProjectDetail(p){
     <div class="two-col">
       <div class="card"><div class="section-label">Présentation</div>
         <div style="font-size:13.5px;line-height:1.8;">${p.description?esc(p.description):"<span style='color:var(--ink-soft)'>Aucune description.</span>"}</div>
-        <div style="margin-top:14px;display:flex;align-items:center;gap:10px;">${progressBar(p.progress_pct)}</div>
+        <div style="margin-top:14px;display:flex;align-items:center;gap:10px;">${progressBar(p.progress_pct)}${manage?`<button class="btn tiny secondary" data-action="project-recalc" data-id="${p.id}" title="Moyenne de l'avancement des tâches">Recalculer depuis les tâches</button>`:""}</div>
+        ${(()=>{const ts=state.projectTasks||[];if(!ts.length)return "";const done=ts.filter(t=>t.status==="Done").length;const late=ts.filter(t=>t.status!=="Done"&&t.end_date&&new Date(t.end_date)<new Date()).length;return `<div class="meta" style="margin-top:10px;font-size:12.5px;color:var(--ink-soft);">${done}/${ts.length} tâche(s) terminée(s)${late?` · <span style="color:var(--critical);font-weight:600;">${late} en retard</span>`:""}</div>`;})()}
+      </div>
+      <div class="card"><div class="section-label">Équipe du projet (${(state.projectMembers||[]).length})</div>
+        <div class="hint" style="font-size:12px;">Seuls les membres listés ici (plus le chef et le créateur) peuvent voir et interagir avec ce projet.</div>
+        ${(state.projectMembers||[]).map(m=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px;">
+            <span>${esc(m.user?m.user.full_name||m.user.email:"—")}</span>
+            ${manage?`<button class="btn tiny danger" data-action="member-del" data-id="${m.id}">Retirer</button>`:""}
+          </div>`).join("")||`<div class="hint" style="font-size:12px;">Aucun membre.</div>`}
+        ${manage?`<div class="btn-row" style="margin-top:10px;align-items:center;">
+          <select id="pm-user" style="font-size:12.5px;padding:6px 8px;"><option value="">— ajouter un membre —</option>${(state.profilesList||[]).filter(u=>!(state.projectMembers||[]).some(m=>m.user_id===u.id)).map(u=>`<option value="${u.id}">${esc(displayName(u))}</option>`).join("")}</select>
+          <button class="btn tiny" data-action="member-add" data-id="${p.id}">Ajouter</button>
+        </div><div id="pm-err"></div>`:""}
       </div>
       ${manage?`<div class="card"><div class="section-label">Pilotage</div>
         <div class="field"><label for="pj-status-upd">Statut</label><div class="btn-row"><select id="pj-status-upd" style="max-width:200px;">${statusOpts}</select><button class="btn tiny" data-action="project-status" data-id="${p.id}">Appliquer</button></div></div>
@@ -1921,27 +1971,45 @@ function renderProjectDetail(p){
 }
 
 async function loadProjectTasks(pid){
-  const { data } = await sb.from("project_tasks").select("*").eq("project_id",pid).order("start_date",{ascending:true,nullsFirst:false});
-  state.projectTasks=data||[];
+  const [tk, mb] = await Promise.all([
+    sb.from("project_tasks").select("*").eq("project_id",pid).order("start_date",{ascending:true,nullsFirst:false}),
+    sb.from("project_members").select("*, user:user_id(full_name,email)").eq("project_id",pid)
+  ]);
+  state.projectTasks=tk.data||[];
+  state.projectMembers=mb.data||[];
+  const ids=state.projectTasks.map(t=>t.id);
+  if(ids.length){
+    const { data: acts } = await sb.from("service_activities").select("id,status,project_task_id").in("project_task_id",ids);
+    state.taskActivities=acts||[];
+  } else state.taskActivities=[];
   if(state.selectedProjectId===pid) render();
 }
 function renderProjectTasks(p){
   const manage=canManageProjects();
   const tasks=(state.projectTasks||[]);
+  const laDeps=(state.departments||[]);
   const taskRows=tasks.map(t=>{
     const dep = t.depends_on_task_id ? (tasks.find(x=>x.id===t.depends_on_task_id)||{}).name : null;
-    const ctrl = manage ? `<div class="btn-row" style="margin-top:8px;flex-wrap:wrap;align-items:center;gap:8px;">
+    const canTouch = manage || t.assignee_id===uid();
+    const linked=(state.taskActivities||[]).find(a=>a.project_task_id===t.id);
+    const linkBadge = linked ? `<span class="badge" style="background:${actColor(linked.status)}22;color:${actColor(linked.status)};" title="Activité de service liée">service : ${esc(linked.status)}</span>` : "";
+    const delegate = (manage && !linked && laDeps.length) ? `<span style="font-size:12px;color:var(--ink-soft);margin-left:10px;">Déléguer au service</span>
+        <select id="tk-dg-${t.id}" style="font-size:12px;padding:5px 7px;"><option value="">— service —</option>${laDeps.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join("")}</select>
+        <button class="btn tiny secondary" data-action="task-delegate" data-id="${t.id}" data-name="${esc(t.name)}">Créer l'activité</button>` : "";
+    const ctrl = canTouch ? `<div class="btn-row" style="margin-top:8px;flex-wrap:wrap;align-items:center;gap:8px;">
         <span style="font-size:12px;color:var(--ink-soft);">Statut</span>
         <select id="tk-st-${t.id}" style="font-size:12px;padding:5px 7px;">${TASK_STATUSES.map(([v,l])=>`<option value="${v}" ${t.status===v?'selected':''}>${l}</option>`).join("")}</select>
         <span style="font-size:12px;color:var(--ink-soft);margin-left:6px;">Avancement</span>
         <input type="text" id="tk-pg-${t.id}" value="${Number(t.progress_pct)||0}" style="width:58px;font-size:12px;padding:5px 7px;"><span style="font-size:12px;">%</span>
         <button class="btn tiny" data-action="task-save" data-id="${t.id}">Enregistrer</button>
-        <button class="btn tiny danger" data-action="task-del" data-id="${t.id}">Supprimer</button>
+        ${manage?`<button class="btn tiny danger" data-action="task-del" data-id="${t.id}">Supprimer</button>`:""}
+        ${delegate}
       </div>` : "";
     return `<div class="ticket-row" style="cursor:default;display:block;">
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
         <div class="col-main"><div class="subject">${esc(t.name)}</div>
-          <div class="meta"><span>${t.assignee_id?esc(userName(t.assignee_id)):"Non affectée"}</span>${t.start_date?`<span>${esc(t.start_date)} → ${esc(t.end_date||"?")}</span>`:""}${dep?`<span>après : ${esc(dep)}</span>`:""}</div>
+          ${t.description?`<div style="font-size:12.5px;color:var(--ink-soft);margin-top:2px;white-space:pre-wrap;">${esc(t.description)}</div>`:""}
+          <div class="meta"><span>${t.assignee_id?esc(userName(t.assignee_id)):"Non affectée"}</span>${t.start_date?`<span>${esc(t.start_date)} → ${esc(t.end_date||"?")}</span>`:""}${dep?`<span>après : ${esc(dep)}</span>`:""}${linkBadge}</div>
           <div class="meta" style="margin-top:6px;display:flex;align-items:center;gap:8px;">${progressBar(t.progress_pct)}</div></div>
         <div class="col-status">${taskStatusBadge(t.status)}</div>
       </div>${ctrl}</div>`;
@@ -1953,6 +2021,7 @@ function renderProjectTasks(p){
     const stOpts=TASK_STATUSES.map(([v,l])=>`<option value="${v}" ${v==="To Do"?"selected":""}>${l}</option>`).join("");
     addForm=`<div class="card" style="margin-top:12px;background:var(--surface-2,#fafbfc);"><div class="section-label">Ajouter une tâche</div>
       <div class="field"><label for="tk-name">Intitulé</label><input type="text" id="tk-name" placeholder="ex : Câblage salle serveur"></div>
+      <div class="field"><label for="tk-desc">Description (contexte, argumentaire)</label><textarea id="tk-desc" rows="2" placeholder="Pourquoi cette tâche, attendus, critères de réussite…"></textarea></div>
       <div class="field-row">
         <div class="field"><label for="tk-asg">Responsable</label><select id="tk-asg">${asgOpts}</select></div>
         <div class="field"><label for="tk-dep">Dépend de</label><select id="tk-dep">${depOpts}</select></div>
@@ -2535,7 +2604,62 @@ async function onAction(e){
   }
   if(action==="mt-open-ticket"){ state.myOpenTicketId=el.dataset.id; render(); await loadActivity(el.dataset.id); return; }
   if(action==="mt-open-activity"){ state.myOpenActivityId=el.dataset.id; state.activityComments=[]; render(); await loadActivityComments(el.dataset.id); return; }
-  if(action==="mt-back"){ state.myOpenTicketId=null; state.myOpenActivityId=null; render(); return; }
+  if(action==="mt-back"){ state.myOpenTicketId=null; state.myOpenActivityId=null; state.myOpenTaskId=null; render(); return; }
+  if(action==="mt-open-task"){ state.myOpenTaskId=el.dataset.id; render(); return; }
+  if(action==="mt-task-save"){
+    const id=el.dataset.id;
+    const status=document.getElementById("mt-tk-st").value;
+    const v=Math.max(0,Math.min(100,parseInt(document.getElementById("mt-tk-pg").value,10)||0));
+    const errb=document.getElementById("mt-tk-err");
+    busy("Enregistrement…");
+    try{ const { error } = await sb.from("project_tasks").update({ status, progress_pct:v }).eq("id",id); if(error) throw error;
+      state.myTasksLoaded=false; await loadMyTasks(); }
+    catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
+  if(action==="member-add"){
+    const pid=el.dataset.id; const sel=document.getElementById("pm-user"); const uid_=sel?sel.value:"";
+    const errb=document.getElementById("pm-err");
+    if(!uid_){ if(errb) errb.innerHTML=`<div class="error-msg">Choisissez un utilisateur.</div>`; return; }
+    busy("Ajout du membre…");
+    try{ const { error } = await sb.from("project_members").insert({ project_id:pid, user_id:uid_, added_by:uid() }); if(error) throw error;
+      await loadProjectTasks(pid); unbusy(); }
+    catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
+  if(action==="member-del"){
+    busy("…");
+    try{ await sb.from("project_members").delete().eq("id",el.dataset.id); await loadProjectTasks(state.selectedProjectId); unbusy(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="task-delegate"){
+    const tid=el.dataset.id; const tname=el.dataset.name||"";
+    const sel=document.getElementById("tk-dg-"+tid); const depId=sel?sel.value:"";
+    if(!depId){ alert("Choisissez le service destinataire."); return; }
+    const proj=(state.projects||[]).find(x=>x.id===state.selectedProjectId)||{};
+    busy("Création de l'activité liée…");
+    try{
+      const { error } = await sb.from("service_activities").insert({
+        title:tname, department_id:depId, status:"À faire",
+        description:`Issue du projet ${proj.project_no||""} — ${proj.name||""}`.trim(),
+        project_id:state.selectedProjectId, project_task_id:tid, created_by:uid() });
+      if(error) throw error;
+      state.activitiesLoaded=false;
+      await loadProjectTasks(state.selectedProjectId); unbusy();
+    }catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="project-recalc"){
+    const pid=el.dataset.id; const ts=state.projectTasks||[];
+    if(!ts.length){ alert("Aucune tâche : rien à recalculer."); return; }
+    const avg=Math.round(ts.reduce((sum,t)=>sum+(Number(t.progress_pct)||0),0)/ts.length);
+    if(!confirm(`Avancement calculé depuis les ${ts.length} tâche(s) : ${avg}%. Appliquer ?`)) return;
+    busy("Mise à jour…");
+    try{ await sb.from("projects").update({progress_pct:avg}).eq("id",pid); await reloadProjects(); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
   if(action==="logout"){ if(monDataTimer){clearInterval(monDataTimer);monDataTimer=null;} if(monClockTimer){clearInterval(monClockTimer);monClockTimer=null;} await sb.auth.signOut(); state.session=null; state.profile=null; state.view="dashboard"; render(); return; }
   if(action==="retry"){ state.booting=true; render(); await afterLogin(); return; }
   if(action==="goto-new"){ state.view="tickets"; state.selectedTicketId=null; state.staffNew=true; if(!state.newService) state.newService=getServices()[0]; render(); return; }
@@ -2908,7 +3032,12 @@ async function onAction(e){
     if(!name){ errBox.innerHTML=`<div class="error-msg">L'intitulé de la tâche est obligatoire.</div>`; return; }
     if(start_date && end_date && end_date<start_date){ errBox.innerHTML=`<div class="error-msg">La fin ne peut pas précéder le début.</div>`; return; }
     busy("Ajout…");
-    const { error } = await sb.from("project_tasks").insert({ project_id:pid, name, assignee_id, depends_on_task_id, start_date, end_date, status, progress_pct:0 });
+    const description=(document.getElementById("tk-desc")||{value:""}).value.trim()||null;
+    const { error } = await sb.from("project_tasks").insert({ project_id:pid, name, description, assignee_id, depends_on_task_id, start_date, end_date, status, progress_pct:0 });
+    if(!error && assignee_id){
+      // L'assigné doit voir le projet : on l'ajoute automatiquement à l'équipe.
+      try{ await sb.from("project_members").upsert({ project_id:pid, user_id:assignee_id, added_by:uid() }, { onConflict:"project_id,user_id", ignoreDuplicates:true }); }catch(_){}
+    }
     if(error){ errBox.innerHTML=`<div class="error-msg">${esc(error.message)}</div>`; unbusy(); return; }
     await loadProjectTasks(pid); return;
   }
