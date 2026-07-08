@@ -2016,7 +2016,7 @@ function renderProjectTasks(p){
         <span style="font-size:12px;color:var(--ink-soft);margin-left:6px;">Avancement</span>
         <input type="text" id="tk-pg-${t.id}" value="${Number(t.progress_pct)||0}" style="width:58px;font-size:12px;padding:5px 7px;"><span style="font-size:12px;">%</span>
         <button class="btn tiny" data-action="task-save" data-id="${t.id}">Enregistrer</button>
-        ${manage?`<button class="btn tiny danger" data-action="task-del" data-id="${t.id}">Supprimer</button>`:""}
+        ${(isAdmin()||can("projects","delete"))?`<button class="btn tiny danger" data-action="task-del" data-id="${t.id}">Supprimer</button>`:""}
         ${delegate}
       </div>` : "";
     return `<div class="ticket-row" style="cursor:default;display:block;">
