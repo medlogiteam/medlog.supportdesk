@@ -222,7 +222,8 @@ let state = {
   pos:[], vendors:[], vendorsLoaded:false, procSubview:"requests", selectedPoId:null, poItems:[],
   poReceipts:[], receivedByItem:{}, poReceiving:false,
   projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[],
-  projectsSubview:"projects", projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
+  meetings:[], meetingsLoaded:false, meetingFilter:{status:"all", scope:"mine", search:""}, selectedMeetingId:null, meetingNew:false, meetingParts:[], meetingLinks:[], meetingActions:[],
+  projectsSubview:"projects", ganttZoom:"auto", ganttPxFit:null, ganttScroll:null, projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
   myTickets:[], myActivities:[], myTasksLoaded:false, myOpenTicketId:null, myOpenActivityId:null, unseenMentions:0,
   execLoaded:false, execData:null,
   reportSource:"tickets", reportFilters:{}, reportRows:null, reportRunning:false, reportError:null,
@@ -265,6 +266,9 @@ function canCreatePr(){ return can("procurement","create"); }
 function canViewProjects(){ return can("projects","view"); }
 function canManageProjects(){ return canWrite("projects"); }
 function canViewActivities(){ return can("activities","view"); }
+function canViewMeetings(){ return can("meetings","view"); }
+function canCreateMeetings(){ return isAdmin() || can("meetings","create"); }
+function meetingsStaff(){ return isAdmin() || can("meetings","edit"); }
 function canManageActivities(){ return canWrite("activities"); }
 function canViewExec(){ return can("exec","view"); }
 function canViewReports(){ return can("reports","view"); }
@@ -303,6 +307,7 @@ const SCREENS = [
   {key:"procurement", label:"Achats"},
   {key:"projects",    label:"Projets"},
   {key:"activities",  label:"Suivi par service"},
+  {key:"meetings",    label:"Réunions"},
   {key:"maintenance", label:"Maintenance (administration)"},
 ];
 const PERM_ACTIONS = [["view","Voir"],["create","Créer"],["edit","Modifier"],["delete","Supprimer"]];
@@ -346,6 +351,11 @@ function render(){
   try{ bindEvents(); }catch(e){}
   try{ applyBannerSpeed(); }catch(e){}
   try{ const hd=document.querySelector("header.topbar"); if(hd) document.documentElement.style.setProperty("--topbar-h", hd.offsetHeight+"px"); }catch(e){}
+  try{
+    const sc=document.getElementById("gantt-scroll");
+    if(sc){ if(state.ganttScroll!=null) sc.scrollLeft=state.ganttScroll;
+      sc.addEventListener("scroll", ()=>{ state.ganttScroll=sc.scrollLeft; }, {passive:true}); }
+  }catch(e){}
 }
 // Barres fixes : recalcul de la hauteur d'en-tête quand la fenêtre change de taille.
 window.addEventListener("resize", ()=>{ try{ const hd=document.querySelector("header.topbar"); if(hd) document.documentElement.style.setProperty("--topbar-h", hd.offsetHeight+"px"); }catch(e){} });
@@ -545,6 +555,7 @@ function navGroups(){
         {v:"stock", l:"Stock", show:()=>canViewStock()},
         {v:"procurement", l:"Achats", show:()=>canViewProcurement()} ] },
     { key:"projects", label:"Projets", leaves:[ {v:"projects", l:"Projets", show:()=>canViewProjects()||canViewActivities()} ] },
+    { key:"meetings", label:"Réunions", leaves:[ {v:"meetings", l:"Réunions", show:()=>canViewMeetings()} ] },
     { key:"maint", label:"Maintenance", leaves:[ {v:"maintenance", l:"Maintenance", show:()=>isAdmin()} ] },
   ].filter(g=> g.leaves.some(lf=>lf.show()));
 }
@@ -578,6 +589,7 @@ function renderMain(){
   if(state.view==="stock") return canViewStock()?sub+renderStockArea():"";
   if(state.view==="procurement") return canViewProcurement()?sub+renderProcurementArea():"";
   if(state.view==="projects") return (canViewProjects()||canViewActivities())?renderProjectsArea():"";
+  if(state.view==="meetings") return canViewMeetings()?renderMeetingsArea():"";
   if(state.view==="maintenance") return isAdmin()?renderMaintenance():"";
   return "";
 }
@@ -2055,27 +2067,57 @@ function renderProjectTasks(p){
       ${addForm}
     </div>`;
 }
+function ganttScale(totalDays){
+  if(state.ganttZoom==="fit" && state.ganttPxFit) return state.ganttPxFit;
+  const z = state.ganttZoom==="auto" ? (totalDays<=35?"day":totalDays<=140?"week":"month") : state.ganttZoom;
+  return z==="day"?24 : z==="week"?7 : 2.4;
+}
+function ganttScaleName(totalDays){
+  if(state.ganttZoom==="fit") return "ajusté";
+  const z = state.ganttZoom==="auto" ? (totalDays<=35?"day":totalDays<=140?"week":"month") : state.ganttZoom;
+  return z==="day"?"jour" : z==="week"?"semaine" : "mois";
+}
 function renderGantt(tasks){
   const toD = s => new Date(s+"T00:00:00").getTime();
   const dated = tasks.filter(t=>t.start_date && t.end_date && toD(t.end_date)>=toD(t.start_date));
   if(!dated.length) return `<div class="hint">Ajoutez des dates de début et de fin aux tâches pour afficher la frise.</div>`;
-  const DAY=86400000, dayW=20, rowH=42, labelW=230, headH=26;
+  const DAY=86400000, rowH=42, labelW=230, headH=26;
   let min=Math.min(...dated.map(t=>toD(t.start_date))), max=Math.max(...dated.map(t=>toD(t.end_date)));
-  const totalDays=Math.round((max-min)/DAY)+1, chartW=Math.max(totalDays*dayW, 320), chartH=dated.length*rowH;
+  const totalDays=Math.round((max-min)/DAY)+1;
+  const dayW=ganttScale(totalDays);
+  const chartW=Math.max(Math.round(totalDays*dayW), 320), chartH=dated.length*rowH;
   const idx={}; dated.forEach((t,i)=>idx[t.id]=i);
-  const xOf=d=>Math.round((toD(d)-min)/DAY)*dayW;
-  const wOf=(s,e)=>(Math.round((toD(e)-toD(s))/DAY)+1)*dayW;
-  // bandes de lignes alternées + repères hebdo + ligne "aujourd'hui"
+  const xOf=d=>Math.round((toD(d)-min)/DAY*dayW);
+  const wOf=(s,e)=>Math.max(Math.round((Math.round((toD(e)-toD(s))/DAY)+1)*dayW), 8);
   let bands="", grid="", labels="";
   dated.forEach((t,i)=>{ if(i%2===1) bands+=`<div style="position:absolute;left:0;top:${headH+i*rowH}px;width:${chartW}px;height:${rowH}px;background:rgba(46,117,182,.04);"></div>`; });
-  for(let d=0; d<totalDays; d+=7){ const dt=new Date(min+d*DAY);
-    grid+=`<div style="position:absolute;left:${d*dayW}px;top:0;height:${headH+chartH}px;border-left:1px solid #edf1f6;"></div>`;
-    labels+=`<div style="position:absolute;left:${d*dayW+4}px;top:6px;font-size:10px;color:var(--ink-soft);white-space:nowrap;">${dt.getDate()}/${dt.getMonth()+1}</div>`;
+  // Graduations adaptatives : jour / semaine / mois selon la densité de l'échelle.
+  const fmtDM=dt=>`${dt.getDate()}/${dt.getMonth()+1}`;
+  const MONTHS=["janv","févr","mars","avr","mai","juin","juil","août","sept","oct","nov","déc"];
+  if(dayW>=16){
+    for(let d=0; d<totalDays; d++){ const x=Math.round(d*dayW); const dt=new Date(min+d*DAY); const isMon=dt.getDay()===1;
+      grid+=`<div style="position:absolute;left:${x}px;top:0;height:${headH+chartH}px;border-left:1px solid ${isMon?'#dfe6ef':'#f1f4f9'};"></div>`;
+      if(dayW>=22 || d%2===0) labels+=`<div style="position:absolute;left:${x+3}px;top:6px;font-size:10px;color:var(--ink-soft);white-space:nowrap;">${fmtDM(dt)}</div>`;
+    }
+  } else if(dayW>=4){
+    for(let d=0; d<totalDays; d++){ const dt=new Date(min+d*DAY);
+      if(dt.getDay()===1){ const x=Math.round(d*dayW);
+        grid+=`<div style="position:absolute;left:${x}px;top:0;height:${headH+chartH}px;border-left:1px solid #e3e9f1;"></div>`;
+        labels+=`<div style="position:absolute;left:${x+3}px;top:6px;font-size:10px;color:var(--ink-soft);white-space:nowrap;">${fmtDM(dt)}</div>`;
+      }
+    }
+  } else {
+    for(let d=0; d<totalDays; d++){ const dt=new Date(min+d*DAY);
+      if(dt.getDate()===1){ const x=Math.round(d*dayW);
+        grid+=`<div style="position:absolute;left:${x}px;top:0;height:${headH+chartH}px;border-left:1px solid #dfe6ef;"></div>`;
+        labels+=`<div style="position:absolute;left:${x+4}px;top:6px;font-size:10px;color:var(--ink-soft);white-space:nowrap;">${MONTHS[dt.getMonth()]} ${String(dt.getFullYear()).slice(2)}</div>`;
+      }
+    }
   }
   const today=new Date(); today.setHours(0,0,0,0);
-  let todayLine=""; if(today.getTime()>=min && today.getTime()<=max){ const tx=Math.round((today.getTime()-min)/DAY)*dayW; todayLine=`<div style="position:absolute;left:${tx}px;top:0;height:${headH+chartH}px;border-left:2px solid #e07a5f;opacity:.6;"></div><div style="position:absolute;left:${tx+3}px;top:6px;font-size:10px;color:#e07a5f;">auj.</div>`; }
+  let todayLine=""; if(today.getTime()>=min && today.getTime()<=max){ const tx=Math.round((today.getTime()-min)/DAY*dayW); todayLine=`<div style="position:absolute;left:${tx}px;top:0;height:${headH+chartH}px;border-left:2px solid #e07a5f;opacity:.7;"></div><div style="position:absolute;left:${tx+3}px;top:${headH-16}px;font-size:10px;color:#e07a5f;font-weight:600;">auj.</div>`; }
   const bars=dated.map((t,i)=>{
-    const x=xOf(t.start_date), w=Math.max(dayW,wOf(t.start_date,t.end_date)), y=i*rowH+10;
+    const x=xOf(t.start_date), w=wOf(t.start_date,t.end_date), y=i*rowH+10;
     const pct=Math.max(0,Math.min(100,Number(t.progress_pct)||0));
     const col=t.status==="Done"?"#2e9e5b":(t.status==="Blocked"?"#d9534f":"#3a7bd5");
     const labelInside = w>42 ? `<span style="position:absolute;right:6px;top:1px;font-size:10.5px;color:#fff;mix-blend-mode:difference;">${pct}%</span>` : "";
@@ -2085,17 +2127,28 @@ function renderGantt(tasks){
   dated.forEach((t,i)=>{
     if(t.depends_on_task_id && idx[t.depends_on_task_id]!==undefined){
       const di=idx[t.depends_on_task_id], dep=dated[di];
-      const x1=xOf(dep.start_date)+Math.max(dayW,wOf(dep.start_date,dep.end_date)), y1=di*rowH+21;
+      const x1=xOf(dep.start_date)+wOf(dep.start_date,dep.end_date), y1=di*rowH+21;
       const x2=xOf(t.start_date), y2=i*rowH+21;
       arrows+=`<path d="M${x1},${y1} C${x1+16},${y1} ${x2-16},${y2} ${x2},${y2}" fill="none" stroke="#9aa7b8" stroke-width="1.5" marker-end="url(#ga)"/>`;
     }
   });
-  const names=dated.map((t,i)=>`<div style="height:${rowH}px;display:flex;align-items:center;padding:0 10px;border-bottom:1px solid #eef2f6;${i%2===1?'background:rgba(46,117,182,.04);':''}"><span title="${esc(t.name)}" style="font-size:12.5px;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${esc(t.name)}</span></div>`).join("");
-  return `<div style="display:flex;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
-    <div style="width:${labelW}px;flex:0 0 ${labelW}px;border-right:1px solid var(--border);">
+  const names=dated.map((t)=>`<div style="height:${rowH}px;display:flex;align-items:center;padding:0 10px;font-size:12.5px;border-bottom:1px solid #f0f3f8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(t.name)}">${esc(t.name)}</div>`).join("");
+  const toolbar=`<div class="btn-row" style="margin-bottom:10px;align-items:center;flex-wrap:wrap;gap:6px;">
+      <button class="btn tiny secondary" data-action="gantt-nav" data-dir="today">Aujourd'hui</button>
+      <button class="btn tiny secondary" data-action="gantt-nav" data-dir="prev">◀</button>
+      <button class="btn tiny secondary" data-action="gantt-nav" data-dir="next">▶</button>
+      <span style="width:10px;"></span>
+      <button class="btn tiny secondary" data-action="gantt-zoom" data-z="out">−</button>
+      <button class="btn tiny secondary" data-action="gantt-zoom" data-z="in">+</button>
+      <button class="btn tiny ${state.ganttZoom==='fit'?'':'secondary'}" data-action="gantt-zoom" data-z="fit">Ajuster à l'écran</button>
+      <button class="btn tiny ${state.ganttZoom==='auto'?'':'secondary'}" data-action="gantt-zoom" data-z="auto">Auto</button>
+      <span style="font-size:11px;color:var(--ink-soft);margin-left:6px;">échelle : ${ganttScaleName(totalDays)} · ${totalDays} j</span>
+    </div>`;
+  return toolbar+`<div style="display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+    <div style="width:${labelW}px;flex:0 0 ${labelW}px;border-right:1px solid var(--border);background:#fff;">
       <div style="height:${headH}px;border-bottom:1px solid var(--border);background:#f4f7fb;display:flex;align-items:center;padding:0 10px;font-size:11px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.4px;">Tâche</div>${names}
     </div>
-    <div style="overflow-x:auto;flex:1;">
+    <div id="gantt-scroll" style="overflow-x:auto;flex:1;">
       <div style="position:relative;width:${chartW}px;height:${headH+chartH}px;background:#fff;">
         ${bands}${grid}${todayLine}${labels}
         <div style="position:absolute;left:0;top:${headH}px;width:${chartW}px;height:${chartH}px;">
@@ -2106,6 +2159,164 @@ function renderGantt(tasks){
     </div>
   </div>`;
 }
+
+// =========================== RÉUNIONS ===========================
+const MEETING_STATUSES=["Planifiée","Confirmée","En cours","Terminée","Annulée","Reportée"];
+const MEETING_TYPES=["Réunion","Atelier","Session technique","Point projet","Comité","Autre"];
+const ACTION_STATUSES=["À faire","En cours","Terminé"];
+function meetStatusColor(st){ return st==="Terminée"?"#2e9e5b":st==="Annulée"?"#d9534f":st==="En cours"?"#2e75b6":st==="Reportée"?"#b07d2b":"#8A99AC"; }
+function meetBadge(st){ const c=meetStatusColor(st); return `<span class="badge" style="background:${c}22;color:${c};">${esc(st||"—")}</span>`; }
+async function loadMeetings(){
+  try{
+    const { data } = await sb.from("meetings")
+      .select("*, organizer:organizer_id(full_name), meeting_participants(user_id)")
+      .order("meeting_date",{ascending:true}).order("start_time",{ascending:true});
+    state.meetings=data||[];
+  }catch(_){ state.meetings=[]; }
+  state.meetingsLoaded=true; render();
+}
+async function loadMeetingDetail(id){
+  const [p,l,a]=await Promise.all([
+    sb.from("meeting_participants").select("*, user:user_id(full_name,email)").eq("meeting_id",id),
+    sb.from("meeting_links").select("*").eq("meeting_id",id),
+    sb.from("meeting_actions").select("*, assignee:assignee_id(full_name)").eq("meeting_id",id).order("created_at")
+  ]);
+  state.meetingParts=p.data||[]; state.meetingLinks=l.data||[]; state.meetingActions=a.data||[];
+  render();
+}
+function canEditMeeting(m){ return meetingsStaff() || m.organizer_id===uid(); }
+function renderMeetingsArea(){
+  if(!state.meetingsLoaded){ loadMeetings(); return `<div class="empty-state">Chargement des réunions…</div>`; }
+  if(state.selectedMeetingId){ const m=state.meetings.find(x=>x.id===state.selectedMeetingId); if(m) return `<button class="back-link" data-action="meeting-back">&larr; Réunions</button>`+renderMeetingDetail(m); state.selectedMeetingId=null; }
+  if(state.meetingNew && canCreateMeetings()) return `<button class="back-link" data-action="meeting-back">&larr; Réunions</button>`+renderMeetingForm();
+  const f=state.meetingFilter;
+  let list=state.meetings.slice();
+  if(f.status!=="all") list=list.filter(m=>m.status===f.status);
+  if((f.search||"").trim()){ const q=f.search.toLowerCase(); list=list.filter(m=>(m.title||"").toLowerCase().includes(q)); }
+  const todayISO=new Date().toISOString().slice(0,10);
+  const upcoming=list.filter(m=>m.meeting_date>=todayISO && !["Terminée","Annulée"].includes(m.status));
+  const past=list.filter(m=>!(m.meeting_date>=todayISO && !["Terminée","Annulée"].includes(m.status))).reverse();
+  const stOpts=`<option value="all">Tous statuts</option>`+MEETING_STATUSES.map(x=>`<option value="${x}" ${f.status===x?'selected':''}>${x}</option>`).join("");
+  const newBtn=canCreateMeetings()?`<button class="btn secondary" data-action="meeting-new">+ Nouvelle réunion</button>`:"";
+  const row=m=>{
+    const nb=(m.meeting_participants||[]).length;
+    return `<div class="ticket-row" data-action="open-meeting" data-id="${m.id}">
+      <div class="col-main"><div class="subject">${esc(m.title)}</div>
+        <div class="meta"><span class="badge svc">${esc(m.meeting_type||"Réunion")}</span>
+          <span>${esc(m.meeting_date)}${m.start_time?` · ${String(m.start_time).slice(0,5)}${m.end_time?`–${String(m.end_time).slice(0,5)}`:""}`:""}</span>
+          <span>${m.organizer?esc(m.organizer.full_name):"—"}</span><span>${nb} participant(s)</span>
+          ${m.location?`<span>${esc(m.location.length>34?m.location.slice(0,34)+"…":m.location)}</span>`:""}</div></div>
+      <div class="col-status">${m.priority?`<span class="badge priority-${m.priority}">${esc(m.priority)}</span>`:""}${meetBadge(m.status)}</div></div>`;
+  };
+  return `<h1 class="page-title">Réunions</h1><p class="page-sub">Réunions, ateliers et sessions liés à l'activité. ${list.length} réunion(s) visibles.</p>
+    <div class="filters">
+      <div class="field"><label>Statut</label><select id="mt-f-status">${stOpts}</select></div>
+      <div class="field search"><label>Recherche</label><input type="text" id="mt-f-search" placeholder="Titre…" value="${esc(f.search||'')}"></div>
+      ${newBtn}
+    </div>
+    <div class="section-label">À venir (${upcoming.length})</div>
+    <div class="ticket-list">${upcoming.map(row).join("")||`<div class="empty-state">Aucune réunion à venir.</div>`}</div>
+    <div class="section-label" style="margin-top:20px;">Passées / clôturées (${past.length})</div>
+    <div class="ticket-list">${past.slice(0,20).map(row).join("")||`<div class="empty-state">Rien pour l'instant.</div>`}</div>`;
+}
+function meetingLinkOptions(kind){
+  if(kind==="project") return (state.projects||[]).map(p=>[p.id,(p.project_no?p.project_no+" — ":"")+p.name]);
+  if(kind==="ticket") return (state.tickets||[]).slice(0,200).map(t=>[t.id,(t.ticket_no||"")+" — "+t.subject]);
+  if(kind==="activity") return (state.activities||[]).map(a=>[a.id,a.title]);
+  if(kind==="department") return (state.departments||[]).map(d=>[d.id,d.name]);
+  return [];
+}
+function renderMeetingForm(){
+  const typeOpts=MEETING_TYPES.map(t=>`<option value="${t}">${t}</option>`).join("");
+  const prOpts=`<option value="">—</option>`+getPriorities().map(p=>`<option value="${esc(p)}">${esc(p)}</option>`).join("");
+  const parts=(state.profilesList||[]).map(u=>`<label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:3px 0;"><input type="checkbox" class="mt-part" value="${u.id}"> ${esc(displayName(u))}</label>`).join("");
+  return `<h1 class="page-title">Nouvelle réunion</h1>
+    <div class="card">
+      <div class="field"><label>Titre *</label><input type="text" id="mt-title" placeholder="Ex. Point hebdo migration ERP"></div>
+      <div class="field-row">
+        <div class="field"><label>Type</label><select id="mt-type">${typeOpts}</select></div>
+        <div class="field"><label>Priorité</label><select id="mt-priority">${prOpts}</select></div>
+        <div class="field"><label>Statut</label><select id="mt-status">${MEETING_STATUSES.map(x=>`<option value="${x}">${x}</option>`).join("")}</select></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Date *</label><input type="date" id="mt-date"></div>
+        <div class="field"><label>Début</label><input type="time" id="mt-start"></div>
+        <div class="field"><label>Fin</label><input type="time" id="mt-end"></div>
+      </div>
+      <div class="field"><label>Lieu ou lien visioconférence</label><input type="text" id="mt-loc" placeholder="Salle réunion P3 / https://teams…"></div>
+      <div class="field"><label>Description</label><textarea id="mt-desc" rows="2"></textarea></div>
+      <div class="field"><label>Lier à un élément (optionnel)</label>
+        <div class="field-row">
+          <div class="field"><select id="mt-link-type"><option value="">— aucun lien —</option><option value="project">Projet</option><option value="ticket">Ticket</option><option value="activity">Activité de service</option><option value="department">Service</option></select></div>
+          <div class="field"><select id="mt-link-id"><option value="">—</option></select></div>
+        </div>
+        <div class="hint" style="font-size:12px;">Le libellé de l'élément est figé sur la réunion (traçabilité).</div>
+      </div>
+      <div class="field"><label>Participants</label>
+        <div style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px 12px;">${parts||"—"}</div>
+      </div>
+      <div id="mt-form-err"></div>
+      <button class="btn" data-action="save-meeting">Créer la réunion</button>
+    </div>`;
+}
+function renderMeetingDetail(m){
+  const canEdit=canEditMeeting(m);
+  const parts=(state.meetingParts||[]).map(p=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px;">
+      <span>${esc(p.user?p.user.full_name||p.user.email:"—")}</span>
+      ${canEdit?`<button class="btn tiny danger" data-action="meeting-part-del" data-id="${p.id}">Retirer</button>`:""}</div>`).join("")||`<div class="hint" style="font-size:12px;">Aucun participant.</div>`;
+  const addPart=canEdit?`<div class="btn-row" style="margin-top:8px;align-items:center;">
+      <select id="mt-add-part" style="font-size:12.5px;padding:6px 8px;"><option value="">— ajouter —</option>${(state.profilesList||[]).filter(u=>!(state.meetingParts||[]).some(x=>x.user_id===u.id)).map(u=>`<option value="${u.id}">${esc(displayName(u))}</option>`).join("")}</select>
+      <button class="btn tiny" data-action="meeting-part-add" data-id="${m.id}">Ajouter</button></div>`:"";
+  const links=(state.meetingLinks||[]).map(l=>{
+    const lbl={project:"Projet",task:"Tâche",ticket:"Ticket",activity:"Activité",department:"Service"}[l.subject_type]||l.subject_type;
+    return `<div style="padding:5px 0;font-size:13px;"><span class="badge svc">${lbl}</span> ${esc(l.subject_label||l.subject_id)}</div>`;
+  }).join("")||`<div class="hint" style="font-size:12px;">Aucun élément lié.</div>`;
+  const stCtrl=canEdit?`<div class="btn-row" style="align-items:center;margin-top:10px;">
+      <span style="font-size:12px;color:var(--ink-soft);">Statut</span>
+      <select id="mt-st" style="font-size:12px;padding:5px 8px;">${MEETING_STATUSES.map(x=>`<option value="${x}" ${m.status===x?'selected':''}>${x}</option>`).join("")}</select>
+      <button class="btn tiny" data-action="meeting-status" data-id="${m.id}">Appliquer</button></div>`:"";
+  const minutes=canEdit
+    ? `<div class="field"><label>Ordre du jour</label><textarea id="mt-agenda" rows="3">${esc(m.agenda||"")}</textarea></div>
+       <div class="field"><label>Notes / points discutés</label><textarea id="mt-notes" rows="3">${esc(m.notes||"")}</textarea></div>
+       <div class="field"><label>Décisions prises</label><textarea id="mt-decisions" rows="3">${esc(m.decisions||"")}</textarea></div>
+       <div id="mt-min-err"></div><button class="btn secondary" data-action="meeting-save-minutes" data-id="${m.id}">Enregistrer le compte rendu</button>`
+    : `${m.agenda?`<div class="field"><label>Ordre du jour</label><div style="white-space:pre-wrap;font-size:13.5px;">${esc(m.agenda)}</div></div>`:""}
+       ${m.notes?`<div class="field"><label>Notes</label><div style="white-space:pre-wrap;font-size:13.5px;">${esc(m.notes)}</div></div>`:""}
+       ${m.decisions?`<div class="field"><label>Décisions</label><div style="white-space:pre-wrap;font-size:13.5px;">${esc(m.decisions)}</div></div>`:""}`;
+  const actRows=(state.meetingActions||[]).map(a=>{
+    const mineA=a.assignee_id===uid();
+    const ctl=(canEdit||mineA)?`<select data-action="meeting-action-status" data-id="${a.id}" style="font-size:12px;padding:4px 6px;">${ACTION_STATUSES.map(x=>`<option value="${x}" ${a.status===x?'selected':''}>${x}</option>`).join("")}</select>`:actBadgeLike(a.status);
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);">
+      <div style="min-width:0;"><div style="font-size:13.5px;font-weight:600;">${esc(a.title)}</div>
+        <div class="meta" style="font-size:12px;color:var(--ink-soft);">${a.assignee?esc(a.assignee.full_name):"non affectée"}${a.due_date?` · échéance ${esc(a.due_date)}`:""}${a.priority?` · ${esc(a.priority)}`:""}</div></div>
+      <div>${ctl}</div></div>`;
+  }).join("")||`<div class="hint" style="font-size:12px;">Aucune action.</div>`;
+  const asgOpts=`<option value="">— responsable —</option>`+(state.profilesList||[]).map(u=>`<option value="${u.id}">${esc(displayName(u))}</option>`).join("");
+  const addAction=canEdit?`<div class="field-row" style="margin-top:10px;">
+      <div class="field"><label>Nouvelle action</label><input type="text" id="mt-act-title" placeholder="Ex. Transmettre l'export au service…"></div>
+      <div class="field"><label>Responsable</label><select id="mt-act-asg">${asgOpts}</select></div>
+      <div class="field"><label>Échéance</label><input type="date" id="mt-act-due"></div>
+    </div><div id="mt-act-err"></div><button class="btn tiny" data-action="meeting-action-add" data-id="${m.id}">Ajouter l'action</button>`:"";
+  return `<h1 class="page-title">${esc(m.title)}</h1>
+    <div class="card">
+      <div class="meta" style="display:flex;gap:12px;flex-wrap:wrap;color:var(--ink-soft);font-size:13px;">
+        <span class="badge svc">${esc(m.meeting_type||"Réunion")}</span>${meetBadge(m.status)}
+        ${m.priority?`<span class="badge priority-${m.priority}">${esc(m.priority)}</span>`:""}
+        <span>${esc(m.meeting_date)}${m.start_time?` · ${String(m.start_time).slice(0,5)}${m.end_time?`–${String(m.end_time).slice(0,5)}`:""}`:""}</span>
+        <span>Organisateur : ${m.organizer?esc(m.organizer.full_name):"—"}</span>
+        ${m.location?`<span>${esc(m.location)}</span>`:""}
+      </div>
+      ${m.description?`<p style="margin-top:10px;white-space:pre-wrap;">${esc(m.description)}</p>`:""}
+      ${stCtrl}
+    </div>
+    <div class="two-col">
+      <div class="card"><div class="section-label">Participants (${(state.meetingParts||[]).length})</div>${parts}${addPart}</div>
+      <div class="card"><div class="section-label">Éléments liés</div>${links}</div>
+    </div>
+    <div class="card"><div class="section-label">Compte rendu</div>${minutes}</div>
+    <div class="card"><div class="section-label">Actions de réunion (${(state.meetingActions||[]).length})</div>${actRows}${addAction}</div>`;
+}
+function actBadgeLike(st){ const c=st==="Terminé"?"#2e9e5b":st==="En cours"?"#2e75b6":"#8A99AC"; return `<span class="badge" style="background:${c}22;color:${c};">${esc(st)}</span>`; }
 
 // =========================== MAINTENANCE (admin) ===========================
 function renderMaintenance(){
@@ -2400,7 +2611,7 @@ function exportMedlogixCSV(){
 
 // =========================== EVENTS ===========================
 function bindEvents(){
-  document.querySelectorAll("[data-action]").forEach(el=>{ el.addEventListener(["change-role","change-group"].includes(el.dataset.action)?"change":"click", onAction); });
+  document.querySelectorAll("[data-action]").forEach(el=>{ el.addEventListener(["change-role","change-group","meeting-action-status"].includes(el.dataset.action)?"change":"click", onAction); });
   const wire=(id,fn)=>{const e=document.getElementById(id); if(e) e.addEventListener("change",fn);};
   wire("f-status",e=>{state.filter.status=e.target.value; render();});
   wire("f-service",e=>{state.filter.service=e.target.value; render();});
@@ -2416,6 +2627,15 @@ function bindEvents(){
   wire("act-f-dep",e=>{state.activityFilter.department=e.target.value; render();});
   wire("act-f-status",e=>{state.activityFilter.status=e.target.value; render();});
   wire("act-f-search",e=>{state.activityFilter.search=e.target.value; render();});
+  wire("mt-f-status",e=>{state.meetingFilter.status=e.target.value; render();});
+  wire("mt-f-search",e=>{state.meetingFilter.search=e.target.value; render();});
+  wire("mt-link-type",async e=>{
+    const kind=e.target.value; const sel=document.getElementById("mt-link-id"); if(!sel) return;
+    if(kind==="project" && !state.projectsLoaded){ try{ await loadProjects(); }catch(_){} }
+    if(kind==="activity" && !state.activitiesLoaded){ try{ await loadActivities(); }catch(_){} }
+    const opts=meetingLinkOptions(kind);
+    sel.innerHTML=`<option value="">—</option>`+opts.map(([v,l])=>`<option value="${v}">${esc(l)}</option>`).join("");
+  });
   const rsrc=document.getElementById("report-src");
   if(rsrc) rsrc.addEventListener("change",e=>{ state.reportSource=e.target.value; state.reportFilters={}; state.reportRows=null; state.reportError=null; render(); });
   document.querySelectorAll("[data-rf]").forEach(el=>{
@@ -2671,6 +2891,126 @@ async function onAction(e){
     if(!confirm(`Avancement calculé depuis les ${ts.length} tâche(s) : ${avg}%. Appliquer ?`)) return;
     busy("Mise à jour…");
     try{ await sb.from("projects").update({progress_pct:avg}).eq("id",pid); await reloadProjects(); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="gantt-zoom"){
+    const z=el.dataset.z;
+    if(z==="fit"){
+      const sc=document.getElementById("gantt-scroll");
+      const tasks=(state.projectTasks||[]).filter(t=>t.start_date&&t.end_date);
+      if(sc && tasks.length){
+        const toD=x=>new Date(x+"T00:00:00").getTime();
+        const min=Math.min(...tasks.map(t=>toD(t.start_date))), max=Math.max(...tasks.map(t=>toD(t.end_date)));
+        const days=Math.round((max-min)/86400000)+1;
+        state.ganttPxFit=Math.max(0.8, (sc.clientWidth-4)/days);
+      }
+      state.ganttZoom="fit";
+    } else if(z==="auto"){ state.ganttZoom="auto"; state.ganttPxFit=null; }
+    else {
+      const order=["month","week","day"];
+      const tasks=(state.projectTasks||[]).filter(t=>t.start_date&&t.end_date);
+      let cur=state.ganttZoom;
+      if(cur==="auto"||cur==="fit"){
+        const toD=x=>new Date(x+"T00:00:00").getTime();
+        const days=tasks.length?Math.round((Math.max(...tasks.map(t=>toD(t.end_date)))-Math.min(...tasks.map(t=>toD(t.start_date))))/86400000)+1:60;
+        cur = days<=35?"day":days<=140?"week":"month";
+      }
+      let i=order.indexOf(cur); i = z==="in"?Math.min(order.length-1,i+1):Math.max(0,i-1);
+      state.ganttZoom=order[i]; state.ganttPxFit=null;
+    }
+    state.ganttScroll=null; render(); return;
+  }
+  if(action==="gantt-nav"){
+    const sc=document.getElementById("gantt-scroll"); if(!sc) return;
+    if(el.dataset.dir==="prev") sc.scrollLeft-=Math.round(sc.clientWidth*0.8);
+    else if(el.dataset.dir==="next") sc.scrollLeft+=Math.round(sc.clientWidth*0.8);
+    else { const tl=sc.querySelector('div[style*="e07a5f"]'); if(tl){ const x=parseInt(tl.style.left,10)||0; sc.scrollLeft=Math.max(0,x-Math.round(sc.clientWidth/3)); } else sc.scrollLeft=0; }
+    state.ganttScroll=sc.scrollLeft;
+    return;
+  }
+  if(action==="meeting-new"){ state.meetingNew=true; state.selectedMeetingId=null; render(); return; }
+  if(action==="meeting-back"){ state.meetingNew=false; state.selectedMeetingId=null; render(); return; }
+  if(action==="open-meeting"){ state.selectedMeetingId=el.dataset.id; state.meetingParts=[]; state.meetingLinks=[]; state.meetingActions=[]; render(); await loadMeetingDetail(el.dataset.id); return; }
+  if(action==="save-meeting"){
+    const title=(document.getElementById("mt-title").value||"").trim();
+    const meeting_date=document.getElementById("mt-date").value;
+    const errb=document.getElementById("mt-form-err");
+    if(!title||!meeting_date){ if(errb) errb.innerHTML=`<div class="error-msg">Le titre et la date sont obligatoires.</div>`; return; }
+    const rec={ title, meeting_date,
+      meeting_type:document.getElementById("mt-type").value||null,
+      priority:document.getElementById("mt-priority").value||null,
+      status:document.getElementById("mt-status").value||"Planifiée",
+      start_time:document.getElementById("mt-start").value||null,
+      end_time:document.getElementById("mt-end").value||null,
+      location:(document.getElementById("mt-loc").value||"").trim()||null,
+      description:(document.getElementById("mt-desc").value||"").trim()||null,
+      organizer_id:uid(), created_by:uid() };
+    busy("Création de la réunion…");
+    try{
+      const { data, error } = await sb.from("meetings").insert(rec).select().single(); if(error) throw error;
+      const partIds=[...document.querySelectorAll(".mt-part:checked")].map(c=>c.value);
+      if(!partIds.includes(uid())) partIds.push(uid());
+      if(partIds.length) await sb.from("meeting_participants").insert(partIds.map(u=>({meeting_id:data.id,user_id:u})));
+      const lt=document.getElementById("mt-link-type").value, li=document.getElementById("mt-link-id").value;
+      if(lt && li){
+        const optEl=document.querySelector(`#mt-link-id option[value="${li}"]`);
+        await sb.from("meeting_links").insert({ meeting_id:data.id, subject_type:lt, subject_id:li, subject_label:optEl?optEl.textContent:null });
+      }
+      state.meetingNew=false; state.selectedMeetingId=data.id; state.meetingsLoaded=false;
+      await loadMeetings(); await loadMeetingDetail(data.id);
+    }catch(err){ unbusy(); const b=document.getElementById("mt-form-err"); if(b) b.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
+  if(action==="meeting-status"){
+    const st=document.getElementById("mt-st").value;
+    busy("…");
+    try{ await sb.from("meetings").update({status:st}).eq("id",el.dataset.id); state.meetingsLoaded=false; await loadMeetings(); await loadMeetingDetail(el.dataset.id); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="meeting-save-minutes"){
+    const id=el.dataset.id; const errb=document.getElementById("mt-min-err");
+    busy("Enregistrement…");
+    try{ const { error } = await sb.from("meetings").update({
+        agenda:(document.getElementById("mt-agenda").value||"").trim()||null,
+        notes:(document.getElementById("mt-notes").value||"").trim()||null,
+        decisions:(document.getElementById("mt-decisions").value||"").trim()||null }).eq("id",id);
+      if(error) throw error; state.meetingsLoaded=false; await loadMeetings(); unbusy();
+      if(errb) errb.innerHTML=`<div class="ok-msg">Compte rendu enregistré.</div>`;
+    }catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
+  if(action==="meeting-part-add"){
+    const sel=document.getElementById("mt-add-part"); const u=sel?sel.value:"";
+    if(!u) return;
+    busy("…");
+    try{ await sb.from("meeting_participants").insert({meeting_id:el.dataset.id, user_id:u}); await loadMeetingDetail(el.dataset.id); unbusy(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="meeting-part-del"){
+    busy("…");
+    try{ const part=(state.meetingParts||[]).find(x=>x.id===el.dataset.id); await sb.from("meeting_participants").delete().eq("id",el.dataset.id); if(part) await loadMeetingDetail(part.meeting_id); else render(); unbusy(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="meeting-action-add"){
+    const id=el.dataset.id; const errb=document.getElementById("mt-act-err");
+    const title=(document.getElementById("mt-act-title").value||"").trim();
+    if(!title){ if(errb) errb.innerHTML=`<div class="error-msg">L'intitulé de l'action est obligatoire.</div>`; return; }
+    busy("…");
+    try{ const { error } = await sb.from("meeting_actions").insert({ meeting_id:id, title,
+        assignee_id:document.getElementById("mt-act-asg").value||null,
+        due_date:document.getElementById("mt-act-due").value||null,
+        created_by:uid() });
+      if(error) throw error; await loadMeetingDetail(id); unbusy();
+    }catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
+  if(action==="meeting-action-status"){
+    busy("…");
+    try{ const act=(state.meetingActions||[]).find(x=>x.id===el.dataset.id); await sb.from("meeting_actions").update({status:el.value}).eq("id",el.dataset.id); if(act) await loadMeetingDetail(act.meeting_id); unbusy(); }
     catch(err){ alert(err.message||String(err)); unbusy(); }
     return;
   }
