@@ -223,7 +223,7 @@ let state = {
   poReceipts:[], receivedByItem:{}, poReceiving:false,
   projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[],
   meetings:[], meetingsLoaded:false, meetingFilter:{status:"all", scope:"mine", search:""}, selectedMeetingId:null, meetingNew:false, meetingParts:[], meetingLinks:[], meetingActions:[], meetView:"list", meetMonth:null, myLateActions:0, myMeetActions:[],
-  projectsSubview:"projects", ganttZoom:"auto", ganttPxFit:null, ganttScroll:null, projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
+  projectsSubview:"projects", projectPhases:[], taskChecklists:{}, expandedPhases:{}, expandedTaskId:null, ganttZoom:"auto", ganttPxFit:null, ganttScroll:null, projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
   myTickets:[], myActivities:[], myTasksLoaded:false, myOpenTicketId:null, myOpenActivityId:null, unseenMentions:0,
   execLoaded:false, execData:null,
   reportSource:"tickets", reportFilters:{}, reportRows:null, reportRunning:false, reportError:null,
@@ -2009,12 +2009,20 @@ function renderProjectDetail(p){
 }
 
 async function loadProjectTasks(pid){
-  const [tk, mb] = await Promise.all([
+  const [tk, mb, ph] = await Promise.all([
     sb.from("project_tasks").select("*").eq("project_id",pid).order("start_date",{ascending:true,nullsFirst:false}),
-    sb.from("project_members").select("*, user:user_id(full_name,email)").eq("project_id",pid)
+    sb.from("project_members").select("*, user:user_id(full_name,email)").eq("project_id",pid),
+    sb.from("project_phases").select("*").eq("project_id",pid).order("position").then(r=>r.data||[]).catch(()=>[])
   ]);
   state.projectTasks=tk.data||[];
   state.projectMembers=mb.data||[];
+  state.projectPhases=ph;
+  state.taskChecklists={};
+  const tids=state.projectTasks.map(t=>t.id);
+  if(tids.length){
+    try{ const { data: items } = await sb.from("task_checklist_items").select("*, assignee:assignee_id(full_name)").in("task_id",tids).order("position").order("created_at");
+      (items||[]).forEach(it=>{ (state.taskChecklists[it.task_id]=state.taskChecklists[it.task_id]||[]).push(it); }); }catch(_){}
+  }
   const ids=state.projectTasks.map(t=>t.id);
   if(ids.length){
     const { data: acts } = await sb.from("service_activities").select("id,status,project_task_id").in("project_task_id",ids);
@@ -2026,41 +2034,100 @@ function renderProjectTasks(p){
   const manage=canManageProjects();
   const tasks=(state.projectTasks||[]);
   const laDeps=(state.departments||[]);
-  const taskRows=tasks.map(t=>{
-    const dep = t.depends_on_task_id ? (tasks.find(x=>x.id===t.depends_on_task_id)||{}).name : null;
+  const phases=(state.projectPhases||[]).slice();
+  const groups=phases.map(ph=>({ph, tasks:tasks.filter(t=>t.phase_id===ph.id)}));
+  const orphan=tasks.filter(t=>!t.phase_id || !phases.some(ph=>ph.id===t.phase_id));
+  if(orphan.length || !phases.length) groups.push({ph:{id:"_none", name:"Sans phase"}, tasks:orphan});
+
+  const taskCard=(t)=>{
+    const items=state.taskChecklists[t.id]||[];
+    const pct=taskPct(t);
+    const done=items.filter(i=>Number(i.progress_pct)>=100).length;
+    const open=state.expandedTaskId===t.id;
     const canTouch = manage || t.assignee_id===uid();
     const linked=(state.taskActivities||[]).find(a=>a.project_task_id===t.id);
-    const linkBadge = linked ? `<span class="badge" style="background:${actColor(linked.status)}22;color:${actColor(linked.status)};" title="Activité de service liée">service : ${esc(linked.status)}</span>` : "";
+    const head=`<div data-action="task-toggle" data-id="${t.id}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div style="min-width:0;flex:1;">
+        <div class="subject" style="display:flex;align-items:center;gap:8px;"><span style="color:var(--ink-faint);font-size:11px;">${open?"▼":"▶"}</span>${esc(t.name)}</div>
+        <div class="meta" style="display:flex;align-items:center;gap:10px;margin-top:5px;flex-wrap:wrap;">
+          ${progressBar(pct)}<span style="font-size:12px;font-weight:600;">${pct}%</span>
+          ${t.start_date?`<span style="font-size:12px;color:var(--ink-soft);">${esc(t.start_date)} → ${esc(t.end_date||"?")}</span>`:""}
+          ${items.length?`<span style="font-size:12px;color:var(--ink-soft);">${done} / ${items.length} éléments</span>`:""}
+          ${t.assignee_id?`<span style="font-size:12px;color:var(--ink-soft);">${esc(userName(t.assignee_id))}</span>`:""}
+          ${linked?`<span class="badge" style="background:${actColor(linked.status)}22;color:${actColor(linked.status)};">service : ${esc(linked.status)}</span>`:""}
+        </div>
+      </div>
+      <div>${taskStatusBadge(t.status)}</div>
+    </div>`;
+    if(!open) return `<div class="ticket-row" style="cursor:default;display:block;">${head}</div>`;
+    const clRows=items.map(it=>{
+      const ipct=Math.max(0,Math.min(100,Number(it.progress_pct)||0));
+      const canItem = canTouch || it.assignee_id===uid();
+      const pctSel = canItem ? `<select data-action="cl-pct" data-id="${it.id}" data-task="${t.id}" style="font-size:12px;padding:4px 6px;">${[0,25,50,75,100].map(v=>`<option value="${v}" ${ipct===v?'selected':''}>${v}%</option>`).join("")}</select>` : `<span style="font-size:12px;font-weight:600;">${ipct}%</span>`;
+      const delBtn=(isAdmin()||can("projects","delete"))?`<button class="btn tiny danger" data-action="cl-del" data-id="${it.id}" data-task="${t.id}">✕</button>`:"";
+      return `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);">
+        <input type="checkbox" data-action="cl-check" data-id="${it.id}" data-task="${t.id}" ${ipct>=100?"checked":""} ${canItem?"":"disabled"} style="width:16px;height:16px;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13.5px;${ipct>=100?'text-decoration:line-through;color:var(--ink-soft);':''}">${esc(it.title)}</div>
+          <div style="font-size:11.5px;color:var(--ink-soft);">${it.assignee?esc(it.assignee.full_name):""}${it.notes?` · ${esc(it.notes)}`:""}</div>
+        </div>
+        ${pctSel}${delBtn}</div>`;
+    }).join("")||`<div class="hint" style="font-size:12px;">Aucun élément — la progression reste manuelle tant que la checklist est vide.</div>`;
+    const asgOpts=`<option value="">— responsable —</option>`+(state.profilesList||[]).map(u=>`<option value="${u.id}">${esc(displayName(u))}</option>`).join("");
+    const addItem = canTouch ? `<div class="btn-row" style="margin-top:8px;align-items:center;flex-wrap:wrap;gap:6px;">
+        <input type="text" id="cl-title-${t.id}" placeholder="Nouvel élément…" style="flex:1;min-width:160px;font-size:12.5px;padding:6px 8px;">
+        <select id="cl-asg-${t.id}" style="font-size:12px;padding:6px 8px;">${asgOpts}</select>
+        <button class="btn tiny" data-action="cl-add" data-task="${t.id}">Ajouter</button>
+      </div>` : "";
+    const pctCtl = items.length
+      ? `<span style="font-size:12px;color:var(--ink-soft);">Avancement <strong>automatique</strong> (moyenne de la checklist) : ${pct}%</span>`
+      : `<span style="font-size:12px;color:var(--ink-soft);">Avancement</span> <input type="text" id="tk-pg-${t.id}" value="${Number(t.progress_pct)||0}" style="width:58px;font-size:12px;padding:5px 7px;"><span style="font-size:12px;">%</span>`;
     const delegate = (manage && !linked && laDeps.length) ? `<span style="font-size:12px;color:var(--ink-soft);margin-left:10px;">Déléguer au service</span>
         <select id="tk-dg-${t.id}" style="font-size:12px;padding:5px 7px;"><option value="">— service —</option>${laDeps.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join("")}</select>
         <button class="btn tiny secondary" data-action="task-delegate" data-id="${t.id}" data-name="${esc(t.name)}">Créer l'activité</button>` : "";
-    const ctrl = canTouch ? `<div class="btn-row" style="margin-top:8px;flex-wrap:wrap;align-items:center;gap:8px;">
+    const ctrl = canTouch ? `<div class="btn-row" style="margin-top:10px;flex-wrap:wrap;align-items:center;gap:8px;">
         <span style="font-size:12px;color:var(--ink-soft);">Statut</span>
         <select id="tk-st-${t.id}" style="font-size:12px;padding:5px 7px;">${TASK_STATUSES.map(([v,l])=>`<option value="${v}" ${t.status===v?'selected':''}>${l}</option>`).join("")}</select>
-        <span style="font-size:12px;color:var(--ink-soft);margin-left:6px;">Avancement</span>
-        <input type="text" id="tk-pg-${t.id}" value="${Number(t.progress_pct)||0}" style="width:58px;font-size:12px;padding:5px 7px;"><span style="font-size:12px;">%</span>
+        ${pctCtl}
         <button class="btn tiny" data-action="task-save" data-id="${t.id}">Enregistrer</button>
         ${(isAdmin()||can("projects","delete"))?`<button class="btn tiny danger" data-action="task-del" data-id="${t.id}">Supprimer</button>`:""}
         ${delegate}
       </div>` : "";
-    return `<div class="ticket-row" style="cursor:default;display:block;">
-      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-        <div class="col-main"><div class="subject">${esc(t.name)}</div>
-          ${t.description?`<div style="font-size:12.5px;color:var(--ink-soft);margin-top:2px;white-space:pre-wrap;">${esc(t.description)}</div>`:""}
-          <div class="meta"><span>${t.assignee_id?esc(userName(t.assignee_id)):"Non affectée"}</span>${t.start_date?`<span>${esc(t.start_date)} → ${esc(t.end_date||"?")}</span>`:""}${dep?`<span>après : ${esc(dep)}</span>`:""}${linkBadge}</div>
-          <div class="meta" style="margin-top:6px;display:flex;align-items:center;gap:8px;">${progressBar(t.progress_pct)}</div></div>
-        <div class="col-status">${taskStatusBadge(t.status)}</div>
-      </div>${ctrl}</div>`;
+    return `<div class="ticket-row" style="cursor:default;display:block;border-left-color:var(--brand-2);">${head}
+      ${t.description?`<div style="font-size:12.5px;color:var(--ink-soft);margin-top:8px;white-space:pre-wrap;">${esc(t.description)}</div>`:""}
+      <div style="margin-top:10px;"><div class="section-label" style="font-size:11px;">Checklist (${items.length})</div>${clRows}${addItem}</div>
+      ${ctrl}</div>`;
+  };
+
+  const phaseBlocks=groups.map(g=>{
+    const open=!!state.expandedPhases[g.ph.id];
+    const pct=phasePct(g.tasks);
+    const inner = open ? `<div class="ticket-list" style="margin-top:8px;">${g.tasks.map(taskCard).join("")||`<div class="empty-state">Aucune tâche dans cette phase.</div>`}</div>` : "";
+    return `<div style="margin-bottom:10px;">
+      <div data-action="phase-toggle" data-id="${g.ph.id}" style="cursor:pointer;display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;">
+        <span style="color:var(--ink-faint);font-size:11px;">${open?"▼":"▶"}</span>
+        <strong style="flex:1;font-size:13.5px;">${esc(g.ph.name)}</strong>
+        ${progressBar(pct)}<span style="font-size:12px;font-weight:600;">${pct}%</span>
+        <span style="font-size:12px;color:var(--ink-soft);">${g.tasks.length} tâche(s)</span>
+      </div>${inner}</div>`;
   }).join("");
+
+  const phaseAdd = manage ? `<div class="btn-row" style="margin:6px 0 12px;align-items:center;">
+      <input type="text" id="ph-name" placeholder="Nouvelle phase (ex. Phase 1 — Préparation)" style="flex:1;max-width:340px;font-size:12.5px;padding:6px 8px;">
+      <button class="btn tiny secondary" data-action="phase-add" data-id="${p.id}">Ajouter la phase</button>
+    </div>` : "";
+
   let addForm="";
   if(manage){
     const asgOpts=`<option value="">— responsable —</option>`+state.profilesList.map(u=>`<option value="${u.id}">${esc(displayName(u))}</option>`).join("");
     const depOpts=`<option value="">— aucune dépendance —</option>`+tasks.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join("");
     const stOpts=TASK_STATUSES.map(([v,l])=>`<option value="${v}" ${v==="To Do"?"selected":""}>${l}</option>`).join("");
+    const phOpts=`<option value="">— sans phase —</option>`+phases.map(ph=>`<option value="${ph.id}">${esc(ph.name)}</option>`).join("");
     addForm=`<div class="card" style="margin-top:12px;background:var(--surface-2,#fafbfc);"><div class="section-label">Ajouter une tâche</div>
       <div class="field"><label for="tk-name">Intitulé</label><input type="text" id="tk-name" placeholder="ex : Câblage salle serveur"></div>
       <div class="field"><label for="tk-desc">Description (contexte, argumentaire)</label><textarea id="tk-desc" rows="2" placeholder="Pourquoi cette tâche, attendus, critères de réussite…"></textarea></div>
       <div class="field-row">
+        <div class="field"><label for="tk-phase">Phase</label><select id="tk-phase">${phOpts}</select></div>
         <div class="field"><label for="tk-asg">Responsable</label><select id="tk-asg">${asgOpts}</select></div>
         <div class="field"><label for="tk-dep">Dépend de</label><select id="tk-dep">${depOpts}</select></div>
       </div>
@@ -2075,7 +2142,8 @@ function renderProjectTasks(p){
   }
   return `<div class="card" style="margin-top:16px;"><div class="section-label">Planning (Gantt)</div>${renderGantt(tasks)}</div>
     <div class="card" style="margin-top:16px;"><div class="section-label">Tâches (${tasks.length})</div>
-      ${tasks.length?`<div class="ticket-list">${taskRows}</div>`:`<div class="empty-state">Aucune tâche.</div>`}
+      ${phaseAdd}
+      ${tasks.length||phases.length?phaseBlocks:`<div class="empty-state">Aucune tâche.</div>`}
       ${addForm}
     </div>`;
 }
@@ -2203,6 +2271,16 @@ async function loadMeetingDetail(id){
   render();
 }
 function canEditMeeting(m){ return meetingsStaff() || m.organizer_id===uid(); }
+// --- Progression en cascade (refonte Projets) ---
+function taskPct(t){ const items=state.taskChecklists[t.id]||[]; if(!items.length) return Math.max(0,Math.min(100,Number(t.progress_pct)||0)); return Math.round(items.reduce((s,i)=>s+(Number(i.progress_pct)||0),0)/items.length); }
+function phasePct(tasks){ if(!tasks.length) return 0; return Math.round(tasks.reduce((s,t)=>s+taskPct(t),0)/tasks.length); }
+async function syncTaskPct(taskId){
+  const t=(state.projectTasks||[]).find(x=>x.id===taskId); if(!t) return;
+  const items=state.taskChecklists[taskId]||[]; if(!items.length) return;
+  const pct=Math.round(items.reduce((s,i)=>s+(Number(i.progress_pct)||0),0)/items.length);
+  const status = pct>=100 ? "Done" : (pct>0 && t.status==="Todo" ? "In Progress" : t.status);
+  try{ await sb.from("project_tasks").update({ progress_pct:pct, status }).eq("id",taskId); t.progress_pct=pct; t.status=status; }catch(_){}
+}
 async function notifyMeeting(recipients, event, m, extra){
   const me=uid();
   for(const r of (recipients||[]).filter(x=>x && x!==me)){
@@ -2689,7 +2767,7 @@ function exportMedlogixCSV(){
 
 // =========================== EVENTS ===========================
 function bindEvents(){
-  document.querySelectorAll("[data-action]").forEach(el=>{ el.addEventListener(["change-role","change-group","meeting-action-status","mt-meet-action-status"].includes(el.dataset.action)?"change":"click", onAction); });
+  document.querySelectorAll("[data-action]").forEach(el=>{ el.addEventListener(["change-role","change-group","meeting-action-status","mt-meet-action-status","cl-pct"].includes(el.dataset.action)?"change":"click", onAction); });
   const wire=(id,fn)=>{const e=document.getElementById(id); if(e) e.addEventListener("change",fn);};
   wire("f-status",e=>{state.filter.status=e.target.value; render();});
   wire("f-service",e=>{state.filter.service=e.target.value; render();});
@@ -3130,6 +3208,52 @@ async function onAction(e){
     }catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
     return;
   }
+  if(action==="phase-toggle"){ const id=el.dataset.id; state.expandedPhases[id]=!state.expandedPhases[id]; render(); return; }
+  if(action==="task-toggle"){ state.expandedTaskId = state.expandedTaskId===el.dataset.id ? null : el.dataset.id; render(); return; }
+  if(action==="phase-add"){
+    const name=(document.getElementById("ph-name").value||"").trim();
+    if(!name){ alert("Nommez la phase."); return; }
+    busy("Création de la phase…");
+    try{ const pos=(state.projectPhases||[]).length;
+      const { error } = await sb.from("project_phases").insert({ project_id:el.dataset.id, name, position:pos }); if(error) throw error;
+      await loadProjectTasks(el.dataset.id); unbusy(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="cl-add"){
+    const tid=el.dataset.task;
+    const title=(document.getElementById("cl-title-"+tid).value||"").trim();
+    if(!title) return;
+    const assignee_id=(document.getElementById("cl-asg-"+tid)||{value:""}).value||null;
+    busy("…");
+    try{ const pos=(state.taskChecklists[tid]||[]).length;
+      const { data, error } = await sb.from("task_checklist_items").insert({ task_id:tid, title, assignee_id, position:pos }).select("*, assignee:assignee_id(full_name)").single();
+      if(error) throw error;
+      (state.taskChecklists[tid]=state.taskChecklists[tid]||[]).push(data);
+      await syncTaskPct(tid); unbusy(); render();
+    }catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="cl-check" || action==="cl-pct"){
+    const tid=el.dataset.task, iid=el.dataset.id;
+    const val = action==="cl-check" ? (el.checked?100:0) : Math.max(0,Math.min(100,parseInt(el.value,10)||0));
+    busy("…");
+    try{ const { error } = await sb.from("task_checklist_items").update({ progress_pct:val }).eq("id",iid); if(error) throw error;
+      const it=(state.taskChecklists[tid]||[]).find(x=>x.id===iid); if(it) it.progress_pct=val;
+      await syncTaskPct(tid); unbusy(); render();
+    }catch(err){ alert(err.message||String(err)); unbusy(); render(); }
+    return;
+  }
+  if(action==="cl-del"){
+    const tid=el.dataset.task, iid=el.dataset.id;
+    if(!confirm("Supprimer cet élément de checklist ?")) return;
+    busy("…");
+    try{ const { error } = await sb.from("task_checklist_items").delete().eq("id",iid); if(error) throw error;
+      state.taskChecklists[tid]=(state.taskChecklists[tid]||[]).filter(x=>x.id!==iid);
+      await syncTaskPct(tid); unbusy(); render();
+    }catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
   if(action==="logout"){ if(monDataTimer){clearInterval(monDataTimer);monDataTimer=null;} if(monClockTimer){clearInterval(monClockTimer);monClockTimer=null;} await sb.auth.signOut(); state.session=null; state.profile=null; state.view="dashboard"; render(); return; }
   if(action==="retry"){ state.booting=true; render(); await afterLogin(); return; }
   if(action==="goto-new"){ state.view="tickets"; state.selectedTicketId=null; state.staffNew=true; if(!state.newService) state.newService=getServices()[0]; render(); return; }
@@ -3507,7 +3631,8 @@ async function onAction(e){
     if(start_date && end_date && end_date<start_date){ errBox.innerHTML=`<div class="error-msg">La fin ne peut pas précéder le début.</div>`; return; }
     busy("Ajout…");
     const description=(document.getElementById("tk-desc")||{value:""}).value.trim()||null;
-    const { error } = await sb.from("project_tasks").insert({ project_id:pid, name, description, assignee_id, depends_on_task_id, start_date, end_date, status, progress_pct:0 });
+    const phase_id=(document.getElementById("tk-phase")||{value:""}).value||null;
+    const { error } = await sb.from("project_tasks").insert({ project_id:pid, name, description, phase_id, assignee_id, depends_on_task_id, start_date, end_date, status, progress_pct:0 });
     if(!error && assignee_id){
       // L'assigné doit voir le projet : on l'ajoute automatiquement à l'équipe.
       try{ await sb.from("project_members").upsert({ project_id:pid, user_id:assignee_id, added_by:uid() }, { onConflict:"project_id,user_id", ignoreDuplicates:true }); }catch(_){}
