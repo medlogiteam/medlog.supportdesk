@@ -219,7 +219,7 @@ const ROLE_LABEL = { admin:"Admin", it_manager:"IT Manager", technician:"Technic
 let state = {
   booting:true, session:null, profile:null, loadError:"",
   view:"dashboard", loginError:"",
-  tickets:[], lookups:[], announcements:[], roles:[],
+  tickets:[], lookups:[], announcements:[], roles:[], brands:[], assetModels:[],
   selectedTicketId:null, ticketActivity:[], reopening:false,
   newService:"", filter:{status:"all", service:"all", priority:"all", search:""},
   dashPeriod:"all", customFrom:"", customTo:"",
@@ -1162,16 +1162,38 @@ function catName(id){ const c=state.assetCats.find(x=>x.id===id); return c?c.nam
 
 async function loadAssets(){
   try{
-    const [a, cats, profs] = await Promise.all([
-      sb.from("assets").select("*, category:category_id(name), location:location_id(name), assigned:assigned_user_id(full_name)").order("created_at",{ascending:false}),
+    const [a, cats, profs, br, mo, lo] = await Promise.all([
+      sb.from("assets").select("*, category:category_id(name), location:location_id(name), assigned:assigned_user_id(full_name), brand:brand_id(name), model:model_id(name)").order("created_at",{ascending:false}),
       sb.from("asset_categories").select("*").order("name"),
-      sb.from("profiles").select("id, full_name, first_name, last_name, email").eq("is_active",true).order("full_name")
+      sb.from("profiles").select("id, full_name, first_name, last_name, email").eq("is_active",true).order("full_name"),
+      sb.from("brands").select("*").order("name"),
+      sb.from("asset_models").select("*").order("name"),
+      sb.from("locations").select("*").eq("is_active",true).order("name")
     ]);
-    state.assets=a.data||[]; state.assetCats=cats.data||[]; state.profilesList=profs.data||[]; state.assetsLoaded=true; render();
+    state.assets=a.data||[]; state.assetCats=cats.data||[]; state.profilesList=profs.data||[];
+    state.brands=br.data||[]; state.assetModels=mo.data||[]; state.locations=lo.data||state.locations;
+    state.assetsLoaded=true; render();
   }catch(e){ state.assets=[]; state.assetsLoaded=true; render(); }
 }
+// Référentiels : réutilise l'existant (insensible à la casse) ou crée à la volée.
+async function resolveBrandId(name){
+  const n=(name||"").trim(); if(!n) return null;
+  const hit=(state.brands||[]).find(b=>(b.name||"").toLowerCase()===n.toLowerCase());
+  if(hit) return hit.id;
+  const { data, error } = await sb.from("brands").insert({ name:n }).select().single();
+  if(error) throw error;
+  state.brands.push(data); return data.id;
+}
+async function resolveModelId(name, brand_id, category_id){
+  const n=(name||"").trim(); if(!n) return null;
+  const hit=(state.assetModels||[]).find(m=>(m.name||"").toLowerCase()===n.toLowerCase() && (!brand_id || !m.brand_id || m.brand_id===brand_id));
+  if(hit) return hit.id;
+  const { data, error } = await sb.from("asset_models").insert({ name:n, brand_id:brand_id||null, category_id:category_id||null }).select().single();
+  if(error) throw error;
+  state.assetModels.push(data); return data.id;
+}
 async function reloadAssets(){
-  const { data } = await sb.from("assets").select("*, category:category_id(name), location:location_id(name), assigned:assigned_user_id(full_name)").order("created_at",{ascending:false});
+  const { data } = await sb.from("assets").select("*, category:category_id(name), location:location_id(name), assigned:assigned_user_id(full_name), brand:brand_id(name), model:model_id(name)").order("created_at",{ascending:false});
   state.assets=data||[];
 }
 async function loadAssetMovements(id){
@@ -1205,7 +1227,7 @@ function renderAssetList(){
   const newBtn=canEditAssets()?`<button class="btn secondary" data-action="asset-new">+ Nouvel actif</button>`:"";
   const rows=list.map(a=>`<div class="ticket-row" data-action="open-asset" data-id="${a.id}">
     <div class="col-main"><div class="subject">${esc(a.name)} <span class="ticket-id">${esc(a.asset_tag||"")}</span></div>
-      <div class="meta"><span class="badge svc">${esc(a.category?a.category.name:catName(a.category_id))}</span><span>${a.serial_no?("S/N "+esc(a.serial_no)):""}</span><span>${a.location?esc(a.location.name):""}</span>${a.assigned?`<span>→ ${esc(a.assigned.full_name)}</span>`:""}</div></div>
+      <div class="meta"><span class="badge svc">${esc(a.category?a.category.name:catName(a.category_id))}</span>${(a.brand||a.model)?`<span>${esc([a.brand?a.brand.name:"",a.model?a.model.name:""].filter(Boolean).join(" "))}</span>`:""}<span>${a.serial_no?("S/N "+esc(a.serial_no)):""}</span><span>${a.location?esc(a.location.name):""}</span>${a.assigned?`<span>→ ${esc(a.assigned.full_name)}</span>`:""}</div></div>
     <div class="col-status">${assetStatusBadge(a.status)}</div></div>`).join("");
   return `<h1 class="page-title">Registre des actifs</h1><p class="page-sub">Parc informatique — ${state.assets.length} actif(s).</p>
     <div class="filters">
@@ -1223,6 +1245,10 @@ function renderAssetForm(){
   const catOptions=state.assetCats.slice().sort((a,b)=>(a.parent_id?1:0)-(b.parent_id?1:0)||a.name.localeCompare(b.name)).map(catOpt).join("");
   const statusOpts=assetStatuses().map(s=>`<option value="${esc(s)}" ${s==="In Stock"?"selected":""}>${esc(assetStatusLabel(s))}</option>`).join("");
   const ownerOpts=ownerTypes().map(o=>`<option value="${esc(o)}">${esc(o)}</option>`).join("");
+  const brandOpts=(state.brands||[]).map(b=>`<option value="${esc(b.name)}"></option>`).join("");
+  const modelOpts=(state.assetModels||[]).map(m=>`<option value="${esc(m.name)}"></option>`).join("");
+  const locOpts=`<option value="">— site —</option>`+(state.locations||[]).map(l=>`<option value="${l.id}">${esc(l.name)}</option>`).join("");
+  const assignOpts=`<option value="">— non affecté —</option>`+(state.profilesList||[]).map(u=>`<option value="${u.id}">${esc(displayName(u))}</option>`).join("");
   return `<h1 class="page-title">Nouvel actif</h1><p class="page-sub">Enregistrer un équipement dans le parc.</p>
     <div class="card">
       <div class="field-row">
@@ -1234,9 +1260,18 @@ function renderAssetForm(){
         <div class="field"><label for="as-serial">N° de série</label><input type="text" id="as-serial"></div>
       </div>
       <div class="field-row">
+        <div class="field"><label for="as-brand">Marque</label><input type="text" id="as-brand" list="dl-brands" placeholder="ex : Dell" autocomplete="off"><datalist id="dl-brands">${brandOpts}</datalist></div>
+        <div class="field"><label for="as-model">Modèle</label><input type="text" id="as-model" list="dl-models" placeholder="ex : Latitude 5540" autocomplete="off"><datalist id="dl-models">${modelOpts}</datalist></div>
+      </div>
+      <div class="field-row">
         <div class="field"><label for="as-status">Statut</label><select id="as-status">${statusOpts}</select></div>
         <div class="field"><label for="as-owner">Type de propriété</label><select id="as-owner">${ownerOpts}</select></div>
       </div>
+      <div class="field-row">
+        <div class="field"><label for="as-loc">Site</label><select id="as-loc">${locOpts}</select></div>
+        <div class="field"><label for="as-assign">Affecté à <span style="font-weight:400;color:var(--ink-soft);">(optionnel)</span></label><select id="as-assign">${assignOpts}</select></div>
+      </div>
+      <div class="hint" style="font-size:12px;margin:-4px 0 10px;">Marque et modèle : tapez librement — s'ils n'existent pas encore, ils sont ajoutés au référentiel. Renseigner « Affecté à » place l'actif au statut « Affecté ».</div>
       <div class="field-row">
         <div class="field"><label for="as-purchase">Date d'achat</label><input type="date" id="as-purchase"></div>
         <div class="field"><label for="as-warranty">Fin de garantie</label><input type="date" id="as-warranty"></div>
@@ -1274,7 +1309,7 @@ function renderAssetDetail(a){
   const movements=(state.assetMovements||[]);
   const historyCard=`<div class="card" style="margin-top:16px;"><div class="section-label">Historique des mouvements</div>${movements.length?`<div class="thread">${movements.map(movementRow).join("")}</div>`:`<div class="empty-state">Aucun mouvement enregistré.</div>`}</div>`;
   return `<div class="detail-header"><div><span class="ticket-id">${esc(a.asset_tag||"")}</span><h2>${esc(a.name)}</h2>
-      <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;"><span class="badge svc">${esc(a.category?a.category.name:catName(a.category_id))}</span>${a.serial_no?`<span>S/N ${esc(a.serial_no)}</span>`:""}${a.location?`<span>${esc(a.location.name)}</span>`:""}${a.assigned?`<span>Affecté à ${esc(a.assigned.full_name)}</span>`:""}</div></div>
+      <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;"><span class="badge svc">${esc(a.category?a.category.name:catName(a.category_id))}</span>${(a.brand||a.model)?`<span>${esc([a.brand?a.brand.name:"",a.model?a.model.name:""].filter(Boolean).join(" "))}</span>`:""}${a.serial_no?`<span>S/N ${esc(a.serial_no)}</span>`:""}${a.location?`<span>${esc(a.location.name)}</span>`:""}${a.assigned?`<span>Affecté à ${esc(a.assigned.full_name)}</span>`:""}</div></div>
       <div style="display:flex;gap:8px;align-items:center;">${assetStatusBadge(a.status)}${warn}</div></div>
     <div class="two-col">
       <div class="card"><div class="section-label">Informations</div>
@@ -3419,11 +3454,25 @@ async function onAction(e){
     const purchase_date=document.getElementById("as-purchase").value||null;
     const warranty_expiry=document.getElementById("as-warranty").value||null;
     const notes=document.getElementById("as-notes").value.trim();
+    const location_id=(document.getElementById("as-loc")||{value:""}).value||null;
+    const assigned_user_id=(document.getElementById("as-assign")||{value:""}).value||null;
+    const brandName=(document.getElementById("as-brand")||{value:""}).value.trim();
+    const modelName=(document.getElementById("as-model")||{value:""}).value.trim();
     const errBox=document.getElementById("as-error");
     if(!tag||!name){ errBox.innerHTML=`<div class="error-msg">Tag et désignation obligatoires.</div>`; return; }
+    // Cohérence statut / affectation : le statut suit le bien.
+    let finalStatus=status;
+    if(assigned_user_id) finalStatus="Assigned";
+    else if(status==="Assigned"){ errBox.innerHTML=`<div class="error-msg">Statut « Affecté » : renseignez « Affecté à », ou choisissez un autre statut.</div>`; return; }
     busy("Enregistrement…");
-    const { error } = await sb.from("assets").insert({ asset_tag:tag, name, category_id, serial_no, status, owner_type, purchase_date, warranty_expiry, notes });
-    if(error){ errBox.innerHTML=`<div class="error-msg">${esc(error.message)}</div>`; unbusy(); return; }
+    try{
+      const brand_id=await resolveBrandId(brandName);
+      const model_id=await resolveModelId(modelName, brand_id, category_id);
+      const { data, error } = await sb.from("assets").insert({ asset_tag:tag, name, category_id, brand_id, model_id, serial_no, status:finalStatus, owner_type, location_id, assigned_user_id, purchase_date, warranty_expiry, notes }).select().single();
+      if(error) throw error;
+      // Premier événement du cycle de vie (alimente la frise).
+      try{ await sb.from("asset_movements").insert({ asset_id:data.id, type:"creation", to_status:finalStatus, to_location_id:location_id, to_user_id:assigned_user_id, actor_id:uid(), note:"Enregistrement au parc" }); }catch(_){}
+    }catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); return; }
     await reloadAssets(); state.assetNew=false; render(); return;
   }
   if(action==="asset-status"){
@@ -3693,8 +3742,18 @@ async function onAction(e){
   }
   if(action==="task-save"){
     const id=el.dataset.id, status=document.getElementById("tk-st-"+id).value;
-    let v=parseInt(document.getElementById("tk-pg-"+id).value||"0",10); if(isNaN(v))v=0; v=Math.max(0,Math.min(100,v));
-    if(status==="Done") v=100;            // cohérence : une tâche terminée est à 100%
+    const cur=(state.projectTasks||[]).find(x=>x.id===id)||{};
+    const items=(state.taskChecklists||{})[id]||[];
+    const pgEl=document.getElementById("tk-pg-"+id);   // absent si la tâche a une checklist
+    let v;
+    if(items.length){
+      // La checklist est la source de vérité de l'avancement.
+      v=taskPct(cur);
+      if(status==="Done" && v<100 && !confirm(`La checklist n'est pas complète (${v}%). Marquer la tâche « Terminée » quand même ?`)) return;
+    } else {
+      v=parseInt((pgEl?pgEl.value:"0")||"0",10); if(isNaN(v))v=0; v=Math.max(0,Math.min(100,v));
+      if(status==="Done") v=100;          // cohérence : une tâche terminée est à 100%
+    }
     busy("…");
     try{ await sb.from("project_tasks").update({status, progress_pct:v}).eq("id",id); await loadProjectTasks(state.selectedProjectId); }
     catch(err){ alert(err.message||String(err)); unbusy(); } return;
