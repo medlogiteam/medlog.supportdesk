@@ -161,6 +161,17 @@
   .mon-other{display:flex; gap:8px; flex-wrap:wrap;}
   .mon-other .chip{background:#16233a; border:1px solid #223150; border-radius:20px; padding:5px 11px; font-size:12px; color:#b9cae3;}
   @media print{ header.topbar, .no-print{display:none!important;} body{background:#fff;} main{max-width:none; padding:0;} .card{break-inside:avoid;} }
+  /* ---- Refonte Projets : couche d'expérience ---- */
+  .pj-phase{transition:box-shadow .18s ease, transform .18s ease;}
+  .pj-phase:hover{box-shadow:0 3px 10px rgba(15,30,55,.08);}
+  .pj-card{border-radius:12px !important;border:1px solid var(--border);box-shadow:0 1px 3px rgba(15,30,55,.05);transition:box-shadow .18s ease, transform .18s ease;padding:14px 16px;}
+  .pj-card:hover{box-shadow:0 6px 18px rgba(15,30,55,.10);transform:translateY(-1px);}
+  .pj-expand{animation:pjIn .22s ease;}
+  @keyframes pjIn{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:translateY(0);}}
+  .pj-actions{display:flex;gap:6px;opacity:0;transition:opacity .15s ease;}
+  .pj-card:hover .pj-actions{opacity:1;}
+  .pj-ico{border:1px solid var(--border);background:#fff;border-radius:8px;width:28px;height:28px;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s ease;}
+  .pj-ico:hover{background:var(--surface-2);}
   /* ---- Toasts (notifications non bloquantes) ---- */
   #toasts{position:fixed;right:18px;bottom:18px;z-index:9999;display:flex;flex-direction:column;gap:10px;}
   .toast{background:#16233a;color:#eaf1fa;border:1px solid #2e4260;border-radius:10px;padding:12px 16px;font-size:13.5px;box-shadow:0 8px 24px rgba(0,0,0,.35);cursor:pointer;max-width:340px;animation:toastIn .25s ease;}
@@ -223,7 +234,7 @@ let state = {
   poReceipts:[], receivedByItem:{}, poReceiving:false,
   projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[],
   meetings:[], meetingsLoaded:false, meetingFilter:{status:"all", scope:"mine", search:""}, selectedMeetingId:null, meetingNew:false, meetingParts:[], meetingLinks:[], meetingActions:[], meetView:"list", meetMonth:null, myLateActions:0, myMeetActions:[],
-  projectsSubview:"projects", projectPhases:[], taskChecklists:{}, expandedPhases:{}, expandedTaskId:null, ganttZoom:"auto", ganttPxFit:null, ganttScroll:null, projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
+  projectsSubview:"projects", taskFilter:{q:"", status:"all", asg:"all"}, projectPhases:[], taskChecklists:{}, expandedPhases:{}, expandedTaskId:null, ganttZoom:"auto", ganttPxFit:null, ganttScroll:null, projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
   myTickets:[], myActivities:[], myTasksLoaded:false, myOpenTicketId:null, myOpenActivityId:null, unseenMentions:0,
   execLoaded:false, execData:null,
   reportSource:"tickets", reportFilters:{}, reportRows:null, reportRunning:false, reportError:null,
@@ -1640,7 +1651,7 @@ function projectStatusBadge(s){
 }
 function progressBar(pct){
   const v=Math.max(0,Math.min(100,Number(pct)||0));
-  return `<div style="background:var(--border);border-radius:6px;height:8px;overflow:hidden;min-width:120px;max-width:160px;flex:0 0 auto;"><div style="height:100%;width:${v}%;background:var(--brand-2);"></div></div><span style="font-family:var(--mono);font-size:12px;">${v}%</span>`;
+  return `<div style="background:var(--border);border-radius:6px;height:8px;overflow:hidden;min-width:120px;max-width:160px;flex:0 0 auto;"><div style="height:100%;width:${v}%;background:var(--brand-2);transition:width .5s ease;"></div></div><span style="font-family:var(--mono);font-size:12px;">${v}%</span>`;
 }
 async function loadProjects(){
   try{
@@ -2032,9 +2043,24 @@ async function loadProjectTasks(pid){
 }
 function renderProjectTasks(p){
   const manage=canManageProjects();
-  const tasks=(state.projectTasks||[]);
+  const allTasks=(state.projectTasks||[]);
   const laDeps=(state.departments||[]);
   const phases=(state.projectPhases||[]).slice();
+  // --- Recherche & filtres internes ---
+  const tf=state.taskFilter||{q:"",status:"all",asg:"all"};
+  const q=(tf.q||"").trim().toLowerCase();
+  const filterActive = !!q || tf.status!=="all" || tf.asg!=="all";
+  const match=t=>{
+    if(tf.status!=="all" && t.status!==tf.status) return false;
+    if(tf.asg!=="all" && t.assignee_id!==tf.asg) return false;
+    if(q){
+      const inTask=(t.name||"").toLowerCase().includes(q)||(t.description||"").toLowerCase().includes(q)||(t.assignee_id?userName(t.assignee_id).toLowerCase().includes(q):false);
+      const inItems=(state.taskChecklists[t.id]||[]).some(i=>(i.title||"").toLowerCase().includes(q));
+      if(!inTask && !inItems) return false;
+    }
+    return true;
+  };
+  const tasks=allTasks.filter(match);
   const groups=phases.map(ph=>({ph, tasks:tasks.filter(t=>t.phase_id===ph.id)}));
   const orphan=tasks.filter(t=>!t.phase_id || !phases.some(ph=>ph.id===t.phase_id));
   if(orphan.length || !phases.length) groups.push({ph:{id:"_none", name:"Sans phase"}, tasks:orphan});
@@ -2057,9 +2083,15 @@ function renderProjectTasks(p){
           ${linked?`<span class="badge" style="background:${actColor(linked.status)}22;color:${actColor(linked.status)};">service : ${esc(linked.status)}</span>`:""}
         </div>
       </div>
-      <div>${taskStatusBadge(t.status)}</div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        ${open?"":`<span class="pj-actions">
+          <button class="pj-ico" data-action="task-toggle" data-id="${t.id}" title="Ouvrir / modifier">✏</button>
+          ${canTouch?`<button class="pj-ico" data-action="cl-focus" data-id="${t.id}" title="Ajouter un élément de checklist">＋</button>`:""}
+          ${(isAdmin()||can("projects","delete"))?`<button class="pj-ico" data-action="task-del" data-id="${t.id}" title="Supprimer" style="color:var(--critical);">🗑</button>`:""}
+        </span>`}
+        ${taskStatusBadge(t.status)}</div>
     </div>`;
-    if(!open) return `<div class="ticket-row" style="cursor:default;display:block;">${head}</div>`;
+    if(!open) return `<div class="ticket-row pj-card" style="cursor:default;display:block;">${head}</div>`;
     const clRows=items.map(it=>{
       const ipct=Math.max(0,Math.min(100,Number(it.progress_pct)||0));
       const canItem = canTouch || it.assignee_id===uid();
@@ -2093,18 +2125,18 @@ function renderProjectTasks(p){
         ${(isAdmin()||can("projects","delete"))?`<button class="btn tiny danger" data-action="task-del" data-id="${t.id}">Supprimer</button>`:""}
         ${delegate}
       </div>` : "";
-    return `<div class="ticket-row" style="cursor:default;display:block;border-left-color:var(--brand-2);">${head}
+    return `<div class="ticket-row pj-card" style="cursor:default;display:block;border-left-color:var(--brand-2);">${head}<div class="pj-expand">
       ${t.description?`<div style="font-size:12.5px;color:var(--ink-soft);margin-top:8px;white-space:pre-wrap;">${esc(t.description)}</div>`:""}
       <div style="margin-top:10px;"><div class="section-label" style="font-size:11px;">Checklist (${items.length})</div>${clRows}${addItem}</div>
-      ${ctrl}</div>`;
+      ${ctrl}</div></div>`;
   };
 
   const phaseBlocks=groups.map(g=>{
-    const open=!!state.expandedPhases[g.ph.id];
+    const open=!!state.expandedPhases[g.ph.id] || filterActive;
     const pct=phasePct(g.tasks);
-    const inner = open ? `<div class="ticket-list" style="margin-top:8px;">${g.tasks.map(taskCard).join("")||`<div class="empty-state">Aucune tâche dans cette phase.</div>`}</div>` : "";
+    const inner = open ? `<div class="ticket-list pj-expand" style="margin-top:8px;">${g.tasks.map(taskCard).join("")||`<div class="empty-state">Aucune tâche dans cette phase.</div>`}</div>` : "";
     return `<div style="margin-bottom:10px;">
-      <div data-action="phase-toggle" data-id="${g.ph.id}" style="cursor:pointer;display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;">
+      <div class="pj-phase" data-action="phase-toggle" data-id="${g.ph.id}" style="cursor:pointer;display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;">
         <span style="color:var(--ink-faint);font-size:11px;">${open?"▼":"▶"}</span>
         <strong style="flex:1;font-size:13.5px;">${esc(g.ph.name)}</strong>
         ${progressBar(pct)}
@@ -2140,8 +2172,18 @@ function renderProjectTasks(p){
       <button class="btn" data-action="task-add" data-id="${p.id}">Ajouter la tâche</button>
     </div>`;
   }
-  return `<div class="card" style="margin-top:16px;"><div class="section-label">Planning (Gantt)</div>${renderGantt(tasks)}</div>
-    <div class="card" style="margin-top:16px;"><div class="section-label">Tâches (${tasks.length})</div>
+  const asgSet={}; allTasks.forEach(t=>{ if(t.assignee_id) asgSet[t.assignee_id]=true; });
+  const asgFilterOpts=`<option value="all">Tous responsables</option>`+Object.keys(asgSet).map(id=>`<option value="${id}" ${tf.asg===id?'selected':''}>${esc(userName(id))}</option>`).join("");
+  const stFilterOpts=`<option value="all">Tous statuts</option>`+TASK_STATUSES.map(([v,l])=>`<option value="${v}" ${tf.status===v?'selected':''}>${l}</option>`).join("");
+  const filterBar=`<div class="filters" style="margin-bottom:10px;">
+      <div class="field search"><label>Recherche</label><input type="text" id="pj-t-q" placeholder="Tâche, élément, responsable…" value="${esc(tf.q||'')}"></div>
+      <div class="field"><label>Statut</label><select id="pj-t-status">${stFilterOpts}</select></div>
+      <div class="field"><label>Responsable</label><select id="pj-t-asg">${asgFilterOpts}</select></div>
+      ${filterActive?`<button class="btn tiny secondary" data-action="pj-t-clear" style="align-self:flex-end;">Effacer les filtres</button>`:""}
+    </div>`;
+  return `<div class="card" style="margin-top:16px;"><div class="section-label">Planning (Gantt)</div>${renderGantt(allTasks)}</div>
+    <div class="card" style="margin-top:16px;"><div class="section-label">Tâches (${tasks.length}${filterActive?` / ${allTasks.length}`:""})</div>
+      ${filterBar}
       ${phaseAdd}
       ${tasks.length||phases.length?phaseBlocks:`<div class="empty-state">Aucune tâche.</div>`}
       ${addForm}
@@ -2780,6 +2822,9 @@ function bindEvents(){
   const sts=document.getElementById("st-search");
   if(sts){ sts.addEventListener("input",e=>{state.stockSearch=e.target.value; render();}); sts.focus(); sts.setSelectionRange(sts.value.length,sts.value.length); }
   wire("pj-status",e=>{state.projectFilter.status=e.target.value; render();});
+  wire("pj-t-q",e=>{state.taskFilter.q=e.target.value; render();});
+  wire("pj-t-status",e=>{state.taskFilter.status=e.target.value; render();});
+  wire("pj-t-asg",e=>{state.taskFilter.asg=e.target.value; render();});
   wire("act-f-dep",e=>{state.activityFilter.department=e.target.value; render();});
   wire("act-f-status",e=>{state.activityFilter.status=e.target.value; render();});
   wire("act-f-search",e=>{state.activityFilter.search=e.target.value; render();});
@@ -3208,6 +3253,12 @@ async function onAction(e){
     }catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
     return;
   }
+  if(action==="cl-focus"){
+    state.expandedTaskId=el.dataset.id; render();
+    setTimeout(()=>{ const f=document.getElementById("cl-title-"+el.dataset.id); if(f) f.focus(); }, 60);
+    return;
+  }
+  if(action==="pj-t-clear"){ state.taskFilter={q:"",status:"all",asg:"all"}; render(); return; }
   if(action==="phase-toggle"){ const id=el.dataset.id; state.expandedPhases[id]=!state.expandedPhases[id]; render(); return; }
   if(action==="task-toggle"){ state.expandedTaskId = state.expandedTaskId===el.dataset.id ? null : el.dataset.id; render(); return; }
   if(action==="phase-add"){
