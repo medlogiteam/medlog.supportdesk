@@ -2152,9 +2152,14 @@ function renderProjectTasks(p){
     const delegate = (manage && !linked && laDeps.length) ? `<span style="font-size:12px;color:var(--ink-soft);margin-left:10px;">Déléguer au service</span>
         <select id="tk-dg-${t.id}" style="font-size:12px;padding:5px 7px;"><option value="">— service —</option>${laDeps.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join("")}</select>
         <button class="btn tiny secondary" data-action="task-delegate" data-id="${t.id}" data-name="${esc(t.name)}">Créer l'activité</button>` : "";
+    const dateCtl = manage ? `<span style="font-size:12px;color:var(--ink-soft);margin-left:6px;">Début</span>
+        <input type="date" id="tk-sd-${t.id}" value="${esc(t.start_date||"")}" style="font-size:12px;padding:5px 7px;">
+        <span style="font-size:12px;color:var(--ink-soft);">Fin</span>
+        <input type="date" id="tk-ed-${t.id}" value="${esc(t.end_date||"")}" style="font-size:12px;padding:5px 7px;">` : "";
     const ctrl = canTouch ? `<div class="btn-row" style="margin-top:10px;flex-wrap:wrap;align-items:center;gap:8px;">
         <span style="font-size:12px;color:var(--ink-soft);">Statut</span>
         <select id="tk-st-${t.id}" style="font-size:12px;padding:5px 7px;">${TASK_STATUSES.map(([v,l])=>`<option value="${v}" ${t.status===v?'selected':''}>${l}</option>`).join("")}</select>
+        ${dateCtl}
         ${pctCtl}
         <button class="btn tiny" data-action="task-save" data-id="${t.id}">Enregistrer</button>
         ${(isAdmin()||can("projects","delete"))?`<button class="btn tiny danger" data-action="task-del" data-id="${t.id}">Supprimer</button>`:""}
@@ -3754,8 +3759,17 @@ async function onAction(e){
       v=parseInt((pgEl?pgEl.value:"0")||"0",10); if(isNaN(v))v=0; v=Math.max(0,Math.min(100,v));
       if(status==="Done") v=100;          // cohérence : une tâche terminée est à 100%
     }
+    // Dates : champs présents uniquement pour les gestionnaires → lecture défensive.
+    const patch={ status, progress_pct:v };
+    const sdEl=document.getElementById("tk-sd-"+id), edEl=document.getElementById("tk-ed-"+id);
+    if(sdEl || edEl){
+      const sd = sdEl ? (sdEl.value||null) : (cur.start_date||null);
+      const ed = edEl ? (edEl.value||null) : (cur.end_date||null);
+      if(sd && ed && ed<sd){ alert("La date de fin ne peut pas précéder la date de début."); return; }
+      patch.start_date=sd; patch.end_date=ed;
+    }
     busy("…");
-    try{ await sb.from("project_tasks").update({status, progress_pct:v}).eq("id",id); await loadProjectTasks(state.selectedProjectId); }
+    try{ await sb.from("project_tasks").update(patch).eq("id",id); await loadProjectTasks(state.selectedProjectId); }
     catch(err){ alert(err.message||String(err)); unbusy(); } return;
   }
   if(action==="task-del"){
