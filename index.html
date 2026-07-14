@@ -222,7 +222,7 @@ let state = {
   pos:[], vendors:[], vendorsLoaded:false, procSubview:"requests", selectedPoId:null, poItems:[],
   poReceipts:[], receivedByItem:{}, poReceiving:false,
   projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[],
-  meetings:[], meetingsLoaded:false, meetingFilter:{status:"all", scope:"mine", search:""}, selectedMeetingId:null, meetingNew:false, meetingParts:[], meetingLinks:[], meetingActions:[],
+  meetings:[], meetingsLoaded:false, meetingFilter:{status:"all", scope:"mine", search:""}, selectedMeetingId:null, meetingNew:false, meetingParts:[], meetingLinks:[], meetingActions:[], meetView:"list", meetMonth:null, myLateActions:0, myMeetActions:[],
   projectsSubview:"projects", ganttZoom:"auto", ganttPxFit:null, ganttScroll:null, projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
   myTickets:[], myActivities:[], myTasksLoaded:false, myOpenTicketId:null, myOpenActivityId:null, unseenMentions:0,
   execLoaded:false, execData:null,
@@ -465,6 +465,12 @@ async function afterLogin(){
   const params = isMonitor() ? null : new URLSearchParams(location.search);
   const tkParam = params ? params.get("ticket") : null;
   const acParam = params ? params.get("activity") : null;
+  const mtParam = params ? params.get("meeting") : null;
+  if(mtParam && !state.loadError){
+    state.view="meetings"; state.selectedMeetingId=mtParam; state.meetingsLoaded=false;
+    try{ history.replaceState(null,"",location.pathname); }catch(_){}
+    render(); return;
+  }
   if((acParam || tkParam) && !state.loadError){
     state.view="mytasks"; state.myTasksLoaded=false;
     if(acParam) state.myOpenActivityId=acParam;
@@ -1828,14 +1834,16 @@ async function loadMyTasks(){
   const aIds=[...new Set(mentions.filter(m=>m.subject_type==='activity').map(m=>m.subject_id))];
   const tSel="*, requester:requester_id(full_name), assignee:assignee_id(full_name)";
   const aSel="*, department:department_id(name), assignee:assignee_id(full_name)";
-  const [tA, tT, aA, aT, pT] = await Promise.all([
+  const [tA, tT, aA, aT, pT, mA] = await Promise.all([
     sb.from("tickets").select(tSel).eq("assignee_id",me),
     tIds.length?sb.from("tickets").select(tSel).in("id",tIds):Promise.resolve({data:[]}),
     sb.from("service_activities").select(aSel).eq("assignee_id",me),
     aIds.length?sb.from("service_activities").select(aSel).in("id",aIds):Promise.resolve({data:[]}),
-    sb.from("project_tasks").select("*, project:project_id(name,project_no)").eq("assignee_id",me).neq("status","Done").order("end_date",{ascending:true,nullsFirst:false})
+    sb.from("project_tasks").select("*, project:project_id(name,project_no)").eq("assignee_id",me).neq("status","Done").order("end_date",{ascending:true,nullsFirst:false}),
+    sb.from("meeting_actions").select("*, meeting:meeting_id(title,meeting_date)").eq("assignee_id",me).neq("status","Terminé").order("due_date",{ascending:true,nullsFirst:false})
   ]);
   state.myProjTasks=pT.data||[];
+  state.myMeetActions=mA.data||[];
   const tMap={}; [...(tA.data||[]),...(tT.data||[])].forEach(t=>tMap[t.id]=t); state.myTickets=Object.values(tMap);
   const aMap={}; [...(aA.data||[]),...(aT.data||[])].forEach(a=>aMap[a.id]=a); state.myActivities=Object.values(aMap);
   // Lien profond ticket : charger directement s'il n'est ni assigné ni tagué pour cette personne.
@@ -1898,7 +1906,11 @@ function renderMyTasks(){
     <div class="section-label" style="margin-top:20px;">Tâches de projet (${state.myProjTasks.length})</div><div class="ticket-list">${(state.myProjTasks||[]).map(t=>{
       const late=t.end_date&&new Date(t.end_date)<new Date();
       return `<div class="ticket-row" data-action="mt-open-task" data-id="${t.id}"><div class="col-main"><div class="subject">${esc(t.name)}</div><div class="meta"><span>${t.project?esc(t.project.name):"—"}</span>${t.end_date?`<span ${late?'style="color:var(--critical);font-weight:600;"':''}>échéance ${esc(t.end_date)}</span>`:""}</div></div><div class="col-status">${taskStatusBadge(t.status)}</div></div>`;
-    }).join("")||`<div class="empty-state">Aucune tâche de projet.</div>`}</div>`;
+    }).join("")||`<div class="empty-state">Aucune tâche de projet.</div>`}</div>
+    <div class="section-label" style="margin-top:20px;">Actions de réunion (${(state.myMeetActions||[]).length})</div><div class="ticket-list">${(state.myMeetActions||[]).map(a=>{
+      const late=a.due_date && a.due_date<new Date().toISOString().slice(0,10);
+      return `<div class="ticket-row" style="cursor:default;"><div class="col-main"><div class="subject">${esc(a.title)}</div><div class="meta"><span>${a.meeting?esc(a.meeting.title):"—"}</span>${a.due_date?`<span ${late?'style="color:var(--critical);font-weight:600;"':''}>échéance ${esc(a.due_date)}</span>`:""}</div></div><div class="col-status"><select data-action="mt-meet-action-status" data-id="${a.id}" style="font-size:12px;padding:4px 6px;">${ACTION_STATUSES.map(x=>`<option value="${x}" ${a.status===x?'selected':''}>${x}</option>`).join("")}</select></div></div>`;
+    }).join("")||`<div class="empty-state">Aucune action de réunion.</div>`}</div>`;
 }
 function renderProjectsArea(){
   const hasP=canViewProjects(), hasA=canViewActivities();
@@ -2173,6 +2185,12 @@ async function loadMeetings(){
       .order("meeting_date",{ascending:true}).order("start_time",{ascending:true});
     state.meetings=data||[];
   }catch(_){ state.meetings=[]; }
+  try{
+    const todayISO=new Date().toISOString().slice(0,10);
+    const { count } = await sb.from("meeting_actions").select("id",{count:'exact',head:true})
+      .eq("assignee_id",uid()).neq("status","Terminé").lt("due_date",todayISO);
+    state.myLateActions=count||0;
+  }catch(_){ state.myLateActions=0; }
   state.meetingsLoaded=true; render();
 }
 async function loadMeetingDetail(id){
@@ -2185,10 +2203,23 @@ async function loadMeetingDetail(id){
   render();
 }
 function canEditMeeting(m){ return meetingsStaff() || m.organizer_id===uid(); }
+async function notifyMeeting(recipients, event, m, extra){
+  const me=uid();
+  for(const r of (recipients||[]).filter(x=>x && x!==me)){
+    try{ await sb.functions.invoke("notify-user", { body:Object.assign({
+      kind:"meeting", event, recipient_id:r, meeting_id:m.id, meeting_title:m.title,
+      meeting_date:m.meeting_date, meeting_time:m.start_time?String(m.start_time).slice(0,5):null,
+      location:m.location||null, tagger_name:myName() }, extra||{}) }); }catch(_){}
+  }
+}
 function renderMeetingsArea(){
   if(!state.meetingsLoaded){ loadMeetings(); return `<div class="empty-state">Chargement des réunions…</div>`; }
-  if(state.selectedMeetingId){ const m=state.meetings.find(x=>x.id===state.selectedMeetingId); if(m) return `<button class="back-link" data-action="meeting-back">&larr; Réunions</button>`+renderMeetingDetail(m); state.selectedMeetingId=null; }
+  if(state.selectedMeetingId){ const m=state.meetings.find(x=>x.id===state.selectedMeetingId);
+    if(m){ if(state._meetDetailFor!==m.id){ state._meetDetailFor=m.id; loadMeetingDetail(m.id); }
+      return `<button class="back-link" data-action="meeting-back">&larr; Réunions</button>`+renderMeetingDetail(m); }
+    state.selectedMeetingId=null; }
   if(state.meetingNew && canCreateMeetings()) return `<button class="back-link" data-action="meeting-back">&larr; Réunions</button>`+renderMeetingForm();
+  if(state.meetView==="month") return renderMeetingsMonth();
   const f=state.meetingFilter;
   let list=state.meetings.slice();
   if(f.status!=="all") list=list.filter(m=>m.status===f.status);
@@ -2208,7 +2239,18 @@ function renderMeetingsArea(){
           ${m.location?`<span>${esc(m.location.length>34?m.location.slice(0,34)+"…":m.location)}</span>`:""}</div></div>
       <div class="col-status">${m.priority?`<span class="badge priority-${m.priority}">${esc(m.priority)}</span>`:""}${meetBadge(m.status)}</div></div>`;
   };
+  const wk=new Date(); wk.setDate(wk.getDate()+7); const wkISO=wk.toISOString().slice(0,10);
+  const kToday=state.meetings.filter(m=>m.meeting_date===todayISO && !["Terminée","Annulée"].includes(m.status)).length;
+  const k7=state.meetings.filter(m=>m.meeting_date>todayISO && m.meeting_date<=wkISO && !["Terminée","Annulée"].includes(m.status)).length;
+  const kDone=state.meetings.filter(m=>m.status==="Terminée" && (m.meeting_date||"").slice(0,7)===todayISO.slice(0,7)).length;
   return `<h1 class="page-title">Réunions</h1><p class="page-sub">Réunions, ateliers et sessions liés à l'activité. ${list.length} réunion(s) visibles.</p>
+    <div class="subnav"><button data-action="meet-view" data-v="list" class="active">Liste</button><button data-action="meet-view" data-v="month">Mois</button></div>
+    <div class="stat-row" style="margin-bottom:14px;">
+      <div class="stat ${kToday?'accent':''}"><div class="n">${kToday}</div><div class="l">Aujourd'hui</div></div>
+      <div class="stat"><div class="n">${k7}</div><div class="l">7 prochains jours</div></div>
+      <div class="stat ${state.myLateActions?'alert':''}"><div class="n">${state.myLateActions}</div><div class="l">Mes actions en retard</div></div>
+      <div class="stat"><div class="n">${kDone}</div><div class="l">Terminées (mois)</div></div>
+    </div>
     <div class="filters">
       <div class="field"><label>Statut</label><select id="mt-f-status">${stOpts}</select></div>
       <div class="field search"><label>Recherche</label><input type="text" id="mt-f-search" placeholder="Titre…" value="${esc(f.search||'')}"></div>
@@ -2308,6 +2350,13 @@ function renderMeetingDetail(m){
       </div>
       ${m.description?`<p style="margin-top:10px;white-space:pre-wrap;">${esc(m.description)}</p>`:""}
       ${stCtrl}
+      ${canEdit?`<div class="btn-row" style="align-items:flex-end;margin-top:12px;flex-wrap:wrap;gap:8px;">
+        <div class="field" style="margin:0;"><label>Date</label><input type="date" id="mt-re-date" value="${esc(m.meeting_date||'')}"></div>
+        <div class="field" style="margin:0;"><label>Début</label><input type="time" id="mt-re-start" value="${m.start_time?String(m.start_time).slice(0,5):''}"></div>
+        <div class="field" style="margin:0;"><label>Fin</label><input type="time" id="mt-re-end" value="${m.end_time?String(m.end_time).slice(0,5):''}"></div>
+        <div class="field" style="margin:0;flex:1;min-width:180px;"><label>Lieu / lien</label><input type="text" id="mt-re-loc" value="${esc(m.location||'')}"></div>
+        <button class="btn tiny secondary" data-action="meeting-save-schedule" data-id="${m.id}">Replanifier (notifie les participants)</button>
+      </div><div id="mt-re-err"></div>`:""}
     </div>
     <div class="two-col">
       <div class="card"><div class="section-label">Participants (${(state.meetingParts||[]).length})</div>${parts}${addPart}</div>
@@ -2315,6 +2364,35 @@ function renderMeetingDetail(m){
     </div>
     <div class="card"><div class="section-label">Compte rendu</div>${minutes}</div>
     <div class="card"><div class="section-label">Actions de réunion (${(state.meetingActions||[]).length})</div>${actRows}${addAction}</div>`;
+}
+function renderMeetingsMonth(){
+  const now=new Date();
+  const ym = state.meetMonth || `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+  const [Y,M]=ym.split("-").map(Number);
+  const first=new Date(Y,M-1,1), start=new Date(first); start.setDate(1-((first.getDay()+6)%7)); // lundi
+  const MONTHS=["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
+  const todayISO=new Date().toISOString().slice(0,10);
+  let cells="";
+  for(let i=0;i<42;i++){
+    const d=new Date(start); d.setDate(start.getDate()+i);
+    const iso=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    const inMonth=d.getMonth()===M-1;
+    const meets=state.meetings.filter(m=>m.meeting_date===iso);
+    const chips=meets.slice(0,3).map(m=>`<div data-action="open-meeting" data-id="${m.id}" style="cursor:pointer;font-size:10.5px;background:${meetStatusColor(m.status)}22;color:${meetStatusColor(m.status)};border-radius:5px;padding:2px 5px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(m.title)}">${m.start_time?String(m.start_time).slice(0,5)+" ":""}${esc(m.title)}</div>`).join("")
+      +(meets.length>3?`<div style="font-size:10px;color:var(--ink-soft);margin-top:2px;">+${meets.length-3} autre(s)</div>`:"");
+    cells+=`<div style="min-height:86px;border:1px solid var(--border);border-radius:8px;padding:6px;background:${inMonth?'#fff':'var(--surface-2)'};${iso===todayISO?'box-shadow:inset 0 0 0 2px #e07a5f66;':''}">
+      <div style="font-size:11px;font-weight:600;color:${inMonth?'var(--ink)':'var(--ink-faint)'};">${d.getDate()}</div>${chips}</div>`;
+  }
+  const dows=["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"].map(d=>`<div style="font-size:11px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.4px;text-align:center;">${d}</div>`).join("");
+  return `<h1 class="page-title">Réunions</h1><p class="page-sub">Vue mensuelle.</p>
+    <div class="subnav"><button data-action="meet-view" data-v="list">Liste</button><button data-action="meet-view" data-v="month" class="active">Mois</button></div>
+    <div class="btn-row" style="align-items:center;margin-bottom:12px;">
+      <button class="btn tiny secondary" data-action="meet-month-nav" data-d="-1">◀</button>
+      <strong style="min-width:170px;text-align:center;">${MONTHS[M-1]} ${Y}</strong>
+      <button class="btn tiny secondary" data-action="meet-month-nav" data-d="1">▶</button>
+      <button class="btn tiny secondary" data-action="meet-month-nav" data-d="0">Ce mois</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px;">${dows}${cells}</div>`;
 }
 function actBadgeLike(st){ const c=st==="Terminé"?"#2e9e5b":st==="En cours"?"#2e75b6":"#8A99AC"; return `<span class="badge" style="background:${c}22;color:${c};">${esc(st)}</span>`; }
 
@@ -2611,7 +2689,7 @@ function exportMedlogixCSV(){
 
 // =========================== EVENTS ===========================
 function bindEvents(){
-  document.querySelectorAll("[data-action]").forEach(el=>{ el.addEventListener(["change-role","change-group","meeting-action-status"].includes(el.dataset.action)?"change":"click", onAction); });
+  document.querySelectorAll("[data-action]").forEach(el=>{ el.addEventListener(["change-role","change-group","meeting-action-status","mt-meet-action-status"].includes(el.dataset.action)?"change":"click", onAction); });
   const wire=(id,fn)=>{const e=document.getElementById(id); if(e) e.addEventListener("change",fn);};
   wire("f-status",e=>{state.filter.status=e.target.value; render();});
   wire("f-service",e=>{state.filter.service=e.target.value; render();});
@@ -2840,6 +2918,12 @@ async function onAction(e){
   if(action==="mt-open-activity"){ state.myOpenActivityId=el.dataset.id; state.activityComments=[]; render(); await loadActivityComments(el.dataset.id); return; }
   if(action==="mt-back"){ state.myOpenTicketId=null; state.myOpenActivityId=null; state.myOpenTaskId=null; render(); return; }
   if(action==="mt-open-task"){ state.myOpenTaskId=el.dataset.id; render(); return; }
+  if(action==="mt-meet-action-status"){
+    busy("…");
+    try{ await sb.from("meeting_actions").update({status:el.value}).eq("id",el.dataset.id); state.myTasksLoaded=false; await loadMyTasks(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
   if(action==="mt-task-save"){
     const id=el.dataset.id;
     const status=document.getElementById("mt-tk-st").value;
@@ -2930,7 +3014,7 @@ async function onAction(e){
     return;
   }
   if(action==="meeting-new"){ state.meetingNew=true; state.selectedMeetingId=null; render(); return; }
-  if(action==="meeting-back"){ state.meetingNew=false; state.selectedMeetingId=null; render(); return; }
+  if(action==="meeting-back"){ state.meetingNew=false; state.selectedMeetingId=null; state._meetDetailFor=null; render(); return; }
   if(action==="open-meeting"){ state.selectedMeetingId=el.dataset.id; state.meetingParts=[]; state.meetingLinks=[]; state.meetingActions=[]; render(); await loadMeetingDetail(el.dataset.id); return; }
   if(action==="save-meeting"){
     const title=(document.getElementById("mt-title").value||"").trim();
@@ -2957,7 +3041,8 @@ async function onAction(e){
         const optEl=document.querySelector(`#mt-link-id option[value="${li}"]`);
         await sb.from("meeting_links").insert({ meeting_id:data.id, subject_type:lt, subject_id:li, subject_label:optEl?optEl.textContent:null });
       }
-      state.meetingNew=false; state.selectedMeetingId=data.id; state.meetingsLoaded=false;
+      state.meetingNew=false; state.selectedMeetingId=data.id; state._meetDetailFor=data.id; state.meetingsLoaded=false;
+      notifyMeeting(partIds, "invite", data);
       await loadMeetings(); await loadMeetingDetail(data.id);
     }catch(err){ unbusy(); const b=document.getElementById("mt-form-err"); if(b) b.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
     return;
@@ -2965,7 +3050,9 @@ async function onAction(e){
   if(action==="meeting-status"){
     const st=document.getElementById("mt-st").value;
     busy("…");
-    try{ await sb.from("meetings").update({status:st}).eq("id",el.dataset.id); state.meetingsLoaded=false; await loadMeetings(); await loadMeetingDetail(el.dataset.id); }
+    try{ await sb.from("meetings").update({status:st}).eq("id",el.dataset.id);
+      if(st==="Annulée"){ const m=(state.meetings||[]).find(x=>x.id===el.dataset.id); if(m) notifyMeeting((state.meetingParts||[]).map(p=>p.user_id), "cancel", m); }
+      state.meetingsLoaded=false; await loadMeetings(); await loadMeetingDetail(el.dataset.id); }
     catch(err){ alert(err.message||String(err)); unbusy(); }
     return;
   }
@@ -3004,7 +3091,10 @@ async function onAction(e){
         assignee_id:document.getElementById("mt-act-asg").value||null,
         due_date:document.getElementById("mt-act-due").value||null,
         created_by:uid() });
-      if(error) throw error; await loadMeetingDetail(id); unbusy();
+      if(error) throw error;
+      const asg=document.getElementById("mt-act-asg").value;
+      if(asg){ const m=(state.meetings||[]).find(x=>x.id===id); if(m) notifyMeeting([asg], "action", m, { message:title }); }
+      await loadMeetingDetail(id); unbusy();
     }catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
     return;
   }
@@ -3012,6 +3102,32 @@ async function onAction(e){
     busy("…");
     try{ const act=(state.meetingActions||[]).find(x=>x.id===el.dataset.id); await sb.from("meeting_actions").update({status:el.value}).eq("id",el.dataset.id); if(act) await loadMeetingDetail(act.meeting_id); unbusy(); }
     catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="meet-view"){ state.meetView=el.dataset.v; render(); return; }
+  if(action==="meet-month-nav"){
+    const now=new Date();
+    if(el.dataset.d==="0"){ state.meetMonth=null; render(); return; }
+    const cur=state.meetMonth||`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+    let [Y,M]=cur.split("-").map(Number); M+=Number(el.dataset.d);
+    if(M<1){M=12;Y--;} if(M>12){M=1;Y++;}
+    state.meetMonth=`${Y}-${String(M).padStart(2,"0")}`; render(); return;
+  }
+  if(action==="meeting-save-schedule"){
+    const id=el.dataset.id; const errb=document.getElementById("mt-re-err");
+    const rec={ meeting_date:document.getElementById("mt-re-date").value||null,
+      start_time:document.getElementById("mt-re-start").value||null,
+      end_time:document.getElementById("mt-re-end").value||null,
+      location:(document.getElementById("mt-re-loc").value||"").trim()||null,
+      status:"Reportée" };
+    if(!rec.meeting_date){ if(errb) errb.innerHTML=`<div class="error-msg">La date est obligatoire.</div>`; return; }
+    busy("Replanification…");
+    try{ const { error } = await sb.from("meetings").update(rec).eq("id",id); if(error) throw error;
+      const m=Object.assign({}, (state.meetings||[]).find(x=>x.id===id)||{}, rec, {id});
+      notifyMeeting((state.meetingParts||[]).map(p=>p.user_id), "update", m);
+      state.meetingsLoaded=false; await loadMeetings(); await loadMeetingDetail(id);
+      const b=document.getElementById("mt-re-err"); if(b) b.innerHTML=`<div class="ok-msg">Réunion replanifiée, participants notifiés.</div>`;
+    }catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
     return;
   }
   if(action==="logout"){ if(monDataTimer){clearInterval(monDataTimer);monDataTimer=null;} if(monClockTimer){clearInterval(monClockTimer);monClockTimer=null;} await sb.auth.signOut(); state.session=null; state.profile=null; state.view="dashboard"; render(); return; }
