@@ -234,7 +234,7 @@ let state = {
   dashPeriod:"all", customFrom:"", customTo:"",
   maintSubview:"annonces", lookupType:"service",
   adminUsers:[], usersLoaded:false,
-  assets:[], assetCats:[], assetsLoaded:false, assetFilter:{cat:"all", status:"all", search:""},
+  assets:[], assetCats:[], assetsLoaded:false, assetsSubview:"dashboard", assetFilter:{cat:"all", status:"all", search:"", loc:"all", preset:"all"},
   selectedAssetId:null, assetNew:false, assetMovements:[], profilesList:[],
   stockItems:[], stockLoaded:false, stockSubview:"inventory", stockSearch:"", stockMoves:[], locations:[], locationsLoaded:false,
   selectedStockId:null, stockNew:false,
@@ -1217,7 +1217,94 @@ function renderAssetsArea(){
   if(!state.assetsLoaded){ loadAssets(); return `<div class="empty-state">Chargement du registre…</div>`; }
   if(state.selectedAssetId){ const a=state.assets.find(x=>x.id===state.selectedAssetId); if(a) return `<button class="back-link" data-action="asset-back">&larr; Retour</button>`+renderAssetDetail(a); state.selectedAssetId=null; }
   if(state.assetNew && canEditAssets()) return `<button class="back-link" data-action="asset-cancel">&larr; Retour au registre</button>`+renderAssetForm();
-  return renderAssetList();
+  const sub=`<div class="subnav">
+    <button data-action="asset-subview" data-view="dashboard" class="${state.assetsSubview!=="list"?'active':''}">Parc — vue d'ensemble</button>
+    <button data-action="asset-subview" data-view="list" class="${state.assetsSubview==="list"?'active':''}">Registre (${state.assets.length})</button>
+  </div>`;
+  return sub + (state.assetsSubview==="list" ? renderAssetList() : renderAssetsDashboard());
+}
+// --- Filtrage commun (dashboard <-> registre) ---
+function assetSoonISO(){ const d=new Date(); d.setDate(d.getDate()+settingNum("warranty_warning_days")); return d.toISOString().slice(0,10); }
+function assetTodayISO(){ return new Date().toISOString().slice(0,10); }
+const ASSET_MAINT=["Under Maintenance","Repair Vendor"];
+const ASSET_ATTENTION=["Damaged","Lost"];
+const ASSET_OUT=["Retired","Disposed"];
+function assetPresetMatch(a, preset){
+  const t=assetTodayISO(), soon=assetSoonISO();
+  if(preset==="maint") return ASSET_MAINT.includes(a.status);
+  if(preset==="attention") return ASSET_ATTENTION.includes(a.status);
+  if(preset==="out") return ASSET_OUT.includes(a.status);
+  if(preset==="warranty_soon") return a.warranty_expiry && a.warranty_expiry>=t && a.warranty_expiry<=soon;
+  if(preset==="warranty_expired") return a.warranty_expiry && a.warranty_expiry<t;
+  return true;
+}
+function assetFiltered(){
+  const f=state.assetFilter;
+  let list=state.assets.slice();
+  if(f.cat!=="all") list=list.filter(a=>a.category_id===f.cat);
+  if(f.loc && f.loc!=="all") list=list.filter(a=>a.location_id===f.loc);
+  if(f.status!=="all") list=list.filter(a=>a.status===f.status);
+  if(f.preset && f.preset!=="all") list=list.filter(a=>assetPresetMatch(a,f.preset));
+  if((f.search||"").trim()){ const q=f.search.toLowerCase();
+    list=list.filter(a=>(a.asset_tag||"").toLowerCase().includes(q)||(a.name||"").toLowerCase().includes(q)||(a.serial_no||"").toLowerCase().includes(q)
+      ||(a.brand&&(a.brand.name||"").toLowerCase().includes(q))||(a.model&&(a.model.name||"").toLowerCase().includes(q))); }
+  return list;
+}
+// Barres cliquables : chaque répartition est un filtre.
+function barListNav(items, act){
+  if(!items.length) return `<div class="empty-state" style="padding:22px;">Aucune donnée.</div>`;
+  const max=Math.max(1,...items.map(i=>i.count));
+  return `<div class="bars">${items.map(i=>`<div class="bar-row" data-action="${act}" data-val="${esc(i.val)}" style="cursor:pointer;" title="Filtrer sur ${esc(i.label)}">
+    <div class="b-label" title="${esc(i.label)}">${esc(i.label)}</div>
+    <div class="b-track"><div class="b-fill" style="width:${Math.round(i.count/max*100)}%"></div></div>
+    <div class="b-count">${i.count}</div></div>`).join("")}</div>`;
+}
+function renderAssetsDashboard(){
+  const A=state.assets||[];
+  const t=assetTodayISO(), soon=assetSoonISO();
+  const n=fn=>A.filter(fn).length;
+  const kStock=n(a=>a.status==="In Stock"), kAssigned=n(a=>a.status==="Assigned");
+  const kMaint=n(a=>ASSET_MAINT.includes(a.status));
+  const kWarn=n(a=>a.warranty_expiry && a.warranty_expiry>=t && a.warranty_expiry<=soon);
+  const kExpired=n(a=>a.warranty_expiry && a.warranty_expiry<t);
+  const kAtt=n(a=>ASSET_ATTENTION.includes(a.status));
+  const tile=(v,l,f,cls="")=>`<div class="stat ${cls}" data-action="asset-kpi" data-f="${f}" style="cursor:pointer;" title="Cliquer pour filtrer le registre"><div class="n">${v}</div><div class="l">${l}</div></div>`;
+  const kpis=`<div class="stat-row">
+    ${tile(A.length,"Actifs (total)","all")}
+    ${tile(kStock,"En stock","stock","accent")}
+    ${tile(kAssigned,"Affectés","assigned","accent")}
+    ${tile(kMaint,"En maintenance","maint",kMaint?"alert":"")}
+    ${tile(kWarn,`Garantie < ${settingNum("warranty_warning_days")} j`,"warranty_soon",kWarn?"alert":"")}
+    ${tile(kAtt,"Perdus / endommagés","attention",kAtt?"alert":"")}
+  </div>`;
+  const byCat=(()=>{const m={};A.forEach(a=>{const k=a.category_id||"_"; m[k]=(m[k]||0)+1;});
+    return Object.keys(m).map(k=>({label:k==="_"?"Sans catégorie":catName(k), count:m[k], val:k})).sort((a,b)=>b.count-a.count);})();
+  const byLoc=(()=>{const m={};A.forEach(a=>{const k=a.location_id||"_"; m[k]=(m[k]||0)+1;});
+    return Object.keys(m).map(k=>({label:k==="_"?"Sans site":locName(k), count:m[k], val:k})).sort((a,b)=>b.count-a.count);})();
+  const bySt=(()=>{const m={};A.forEach(a=>{const k=a.status||"_"; m[k]=(m[k]||0)+1;});
+    return Object.keys(m).map(k=>({label:assetStatusLabel(k), count:m[k], val:k})).sort((a,b)=>b.count-a.count);})();
+  const expiredCard=`<div class="card"><div class="section-label">Garanties</div>
+    <div class="stat-row" style="grid-template-columns:1fr 1fr;margin-bottom:0;">
+      <div class="stat ${kExpired?'alert':''}" data-action="asset-kpi" data-f="warranty_expired" style="cursor:pointer;"><div class="n">${kExpired}</div><div class="l">Expirées</div></div>
+      <div class="stat ${kWarn?'alert':''}" data-action="asset-kpi" data-f="warranty_soon" style="cursor:pointer;"><div class="n">${kWarn}</div><div class="l">Bientôt (< ${settingNum("warranty_warning_days")} j)</div></div>
+    </div>
+    <div class="hint" style="font-size:12px;margin-top:10px;">Le délai d'anticipation se règle dans Maintenance → Paramètres.</div></div>`;
+  const outCard=`<div class="card"><div class="section-label">Sortis du parc</div>
+    <div class="stat-row" style="grid-template-columns:1fr;margin-bottom:0;">
+      <div class="stat" data-action="asset-kpi" data-f="out" style="cursor:pointer;"><div class="n">${n(a=>ASSET_OUT.includes(a.status))}</div><div class="l">Réformés / mis au rebut</div></div>
+    </div>
+    <div class="hint" style="font-size:12px;margin-top:10px;">Ces biens restent au registre : leur historique et leur n° de série sont conservés.</div></div>`;
+  return `<h1 class="page-title">Parc informatique</h1><p class="page-sub">Vue d'ensemble — chaque chiffre est cliquable et filtre le registre.</p>
+    ${kpis}
+    <div class="two-col">
+      <div class="card"><div class="section-label">Par catégorie</div>${barListNav(byCat,"asset-bar-cat")}</div>
+      <div class="card"><div class="section-label">Par site</div>${barListNav(byLoc,"asset-bar-loc")}</div>
+    </div>
+    <div class="two-col">
+      <div class="card"><div class="section-label">Par statut</div>${barListNav(bySt,"asset-bar-status")}</div>
+      ${expiredCard}
+    </div>
+    ${outCard}`;
 }
 
 function assetStatusBadge(s){
@@ -1226,23 +1313,33 @@ function assetStatusBadge(s){
 }
 function renderAssetList(){
   const f=state.assetFilter;
-  const cats=state.assetCats.filter(c=>!c.parent_id || true);
   const catOpts=["all",...state.assetCats.map(c=>c.id)].map(id=>id==="all"?`<option value="all" ${f.cat==='all'?'selected':''}>Toutes catégories</option>`:`<option value="${id}" ${f.cat===id?'selected':''}>${esc(catName(id))}</option>`).join("");
   const statusOpts=["all",...assetStatuses()].map(s=>`<option value="${esc(s)}" ${f.status===s?'selected':''}>${s==='all'?'Tous statuts':esc(assetStatusLabel(s))}</option>`).join("");
-  let list=state.assets.slice();
-  if(f.cat!=="all") list=list.filter(a=>a.category_id===f.cat);
-  if(f.status!=="all") list=list.filter(a=>a.status===f.status);
-  if(f.search.trim()){ const q=f.search.toLowerCase(); list=list.filter(a=>(a.asset_tag||"").toLowerCase().includes(q)||(a.name||"").toLowerCase().includes(q)||(a.serial_no||"").toLowerCase().includes(q)); }
+  const locOpts=`<option value="all" ${(f.loc||"all")==='all'?'selected':''}>Tous sites</option>`+(state.locations||[]).map(l=>`<option value="${l.id}" ${f.loc===l.id?'selected':''}>${esc(l.name)}</option>`).join("");
+  const list=assetFiltered();
+  const PRESET_LBL={maint:"En maintenance", attention:"Perdus / endommagés", out:"Réformés / au rebut",
+    warranty_soon:`Garantie < ${settingNum("warranty_warning_days")} j`, warranty_expired:"Garantie expirée"};
+  const active=[]; 
+  if(f.preset && f.preset!=="all") active.push(PRESET_LBL[f.preset]||f.preset);
+  if(f.cat!=="all") active.push(catName(f.cat));
+  if(f.loc && f.loc!=="all") active.push(locName(f.loc));
+  if(f.status!=="all") active.push(assetStatusLabel(f.status));
+  const chip=active.length?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
+      <span style="font-size:12px;color:var(--ink-soft);">Filtre actif :</span>
+      ${active.map(x=>`<span class="badge svc">${esc(x)}</span>`).join("")}
+      <button class="btn tiny secondary" data-action="asset-filter-clear">Effacer</button></div>`:"";
   const newBtn=canEditAssets()?`<button class="btn secondary" data-action="asset-new">+ Nouvel actif</button>`:"";
   const rows=list.map(a=>`<div class="ticket-row" data-action="open-asset" data-id="${a.id}">
     <div class="col-main"><div class="subject">${esc(a.name)} <span class="ticket-id">${esc(a.asset_tag||"")}</span></div>
       <div class="meta"><span class="badge svc">${esc(a.category?a.category.name:catName(a.category_id))}</span>${(a.brand||a.model)?`<span>${esc([a.brand?a.brand.name:"",a.model?a.model.name:""].filter(Boolean).join(" "))}</span>`:""}<span>${a.serial_no?("S/N "+esc(a.serial_no)):""}</span><span>${a.location?esc(a.location.name):""}</span>${a.assigned?`<span>→ ${esc(a.assigned.full_name)}</span>`:""}</div></div>
     <div class="col-status">${assetStatusBadge(a.status)}</div></div>`).join("");
-  return `<h1 class="page-title">Registre des actifs</h1><p class="page-sub">Parc informatique — ${state.assets.length} actif(s).</p>
+  return `<h1 class="page-title">Registre des actifs</h1><p class="page-sub">${list.length} actif(s) affiché(s)${list.length!==state.assets.length?` sur ${state.assets.length}`:""}.</p>
+    ${chip}
     <div class="filters">
       <div class="field"><label>Catégorie</label><select id="af-cat">${catOpts}</select></div>
+      <div class="field"><label>Site</label><select id="af-loc">${locOpts}</select></div>
       <div class="field"><label>Statut</label><select id="af-status">${statusOpts}</select></div>
-      <div class="field search"><label>Recherche</label><input type="text" id="af-search" placeholder="Tag, nom, n° de série…" value="${esc(f.search)}"></div>
+      <div class="field search"><label>Recherche</label><input type="text" id="af-search" placeholder="Tag, nom, série, marque…" value="${esc(f.search)}"></div>
       ${newBtn}
     </div>
     ${list.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucun actif ne correspond.</div>`}`;
@@ -3149,6 +3246,7 @@ function bindEvents(){
   wire("dash-period",e=>{state.dashPeriod=e.target.value; render();});
   wire("af-cat",e=>{state.assetFilter.cat=e.target.value; render();});
   wire("af-status",e=>{state.assetFilter.status=e.target.value; render();});
+  wire("af-loc",e=>{state.assetFilter.loc=e.target.value; render();});
   const af=document.getElementById("af-search");
   if(af){ af.addEventListener("input",e=>{state.assetFilter.search=e.target.value; render();}); af.focus(); af.setSelectionRange(af.value.length,af.value.length); }
   const sts=document.getElementById("st-search");
@@ -3850,6 +3948,19 @@ async function onAction(e){
     }
     return;
   }
+  if(action==="asset-subview"){ state.assetsSubview=el.dataset.view; render(); return; }
+  if(action==="asset-filter-clear"){ state.assetFilter={cat:"all", status:"all", search:"", loc:"all", preset:"all"}; render(); return; }
+  if(action==="asset-kpi"){
+    const f=el.dataset.f;
+    state.assetFilter={cat:"all", status:"all", search:"", loc:"all", preset:"all"};
+    if(f==="stock") state.assetFilter.status="In Stock";
+    else if(f==="assigned") state.assetFilter.status="Assigned";
+    else if(f!=="all") state.assetFilter.preset=f;
+    state.assetsSubview="list"; render(); return;
+  }
+  if(action==="asset-bar-cat"){ state.assetFilter.cat = el.dataset.val==="_" ? "all" : el.dataset.val; state.assetsSubview="list"; render(); return; }
+  if(action==="asset-bar-loc"){ state.assetFilter.loc = el.dataset.val==="_" ? "all" : el.dataset.val; state.assetsSubview="list"; render(); return; }
+  if(action==="asset-bar-status"){ state.assetFilter.status = el.dataset.val==="_" ? "all" : el.dataset.val; state.assetsSubview="list"; render(); return; }
   if(action==="asset-new"){ state.assetNew=true; state.selectedAssetId=null; render(); return; }
   if(action==="asset-cancel"){ state.assetNew=false; render(); return; }
   if(action==="open-asset"){ state.selectedAssetId=el.dataset.id; state.assetMovements=[]; render(); await loadAssetMovements(el.dataset.id); return; }
