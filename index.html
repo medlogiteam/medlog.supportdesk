@@ -234,7 +234,7 @@ let state = {
   poReceipts:[], receivedByItem:{}, poReceiving:false,
   projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[],
   meetings:[], meetingsLoaded:false, meetingFilter:{status:"all", scope:"mine", search:""}, selectedMeetingId:null, meetingNew:false, meetingParts:[], meetingLinks:[], meetingActions:[], meetView:"list", meetMonth:null, myLateActions:0, myMeetActions:[],
-  projectsSubview:"projects", taskAddOpen:false, taskFilter:{q:"", status:"all", asg:"all"}, projectPhases:[], taskChecklists:{}, expandedPhases:{}, expandedTaskId:null, ganttZoom:"auto", ganttPxFit:null, ganttScroll:null, projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
+  projectsSubview:"projects", taskAddOpen:false, ganttOpen:false, taskFilter:{q:"", status:"all", asg:"all"}, projectPhases:[], taskChecklists:{}, expandedPhases:{}, expandedTaskId:null, ganttZoom:"auto", ganttPxFit:null, ganttScroll:null, projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
   myTickets:[], myActivities:[], myTasksLoaded:false, myOpenTicketId:null, myOpenActivityId:null, unseenMentions:0,
   execLoaded:false, execData:null,
   reportSource:"tickets", reportFilters:{}, reportRows:null, reportRunning:false, reportError:null,
@@ -2029,27 +2029,46 @@ function renderProjectDetail(p){
   return `<div class="detail-header"><div><span class="ticket-id">${esc(p.project_no||"")}</span><h2>${esc(p.name)}</h2>
       <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;">${p.manager?`<span>Chef : ${esc(p.manager.full_name)}</span>`:""}${p.location?`<span>${esc(p.location.name)}</span>`:""}${p.start_date?`<span>Début ${esc(p.start_date)}</span>`:""}${p.end_date?`<span>Échéance ${esc(p.end_date)}</span>`:""}</div></div>
       <div style="display:flex;gap:8px;align-items:center;">${p.priority?`<span class="badge priority-${p.priority}">${esc(p.priority)}</span>`:""}${projectStatusBadge(p.status)}${late?`<span class="badge overdue">En retard</span>`:""}</div></div>
-    <div class="two-col">
-      <div class="card"><div class="section-label">Présentation</div>
-        <div style="font-size:13.5px;line-height:1.8;">${p.description?esc(p.description):"<span style='color:var(--ink-soft)'>Aucune description.</span>"}</div>
-        <div style="margin-top:14px;display:flex;align-items:center;gap:10px;">${progressBar(p.progress_pct)}${manage?`<button class="btn tiny secondary" data-action="project-recalc" data-id="${p.id}" title="Moyenne de l'avancement des tâches">Recalculer depuis les tâches</button>`:""}</div>
-        ${(()=>{const ts=state.projectTasks||[];if(!ts.length)return "";const done=ts.filter(t=>t.status==="Done").length;const late=ts.filter(t=>t.status!=="Done"&&t.end_date&&new Date(t.end_date)<new Date()).length;return `<div class="meta" style="margin-top:10px;font-size:12.5px;color:var(--ink-soft);">${done}/${ts.length} tâche(s) terminée(s)${late?` · <span style="color:var(--critical);font-weight:600;">${late} en retard</span>`:""}</div>`;})()}
+    <div class="card pj-card" style="margin-top:14px;padding:16px 18px;">
+      <div style="display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start;">
+
+        <div style="flex:1.5 1 280px;min-width:0;">
+          <div class="section-label">Présentation</div>
+          <div style="font-size:13.5px;line-height:1.75;">${p.description?esc(p.description):"<span style='color:var(--ink-soft)'>Aucune description.</span>"}</div>
+          <div style="margin-top:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">${progressBar(p.progress_pct)}${manage?`<button class="btn tiny secondary" data-action="project-recalc" data-id="${p.id}" title="Moyenne de l'avancement des tâches">Recalculer depuis les tâches</button>`:""}</div>
+          ${(()=>{const ts=state.projectTasks||[];if(!ts.length)return "";const done=ts.filter(t=>t.status==="Done").length;const lt=ts.filter(t=>t.status!=="Done"&&t.end_date&&new Date(t.end_date)<new Date()).length;return `<div style="margin-top:10px;font-size:12.5px;color:var(--ink-soft);">${done}/${ts.length} tâche(s) terminée(s)${lt?` · <span style="color:var(--critical);font-weight:600;">${lt} en retard</span>`:""}</div>`;})()}
+        </div>
+
+        <div style="flex:1 1 240px;min-width:0;">
+          <div class="section-label">Équipe du projet (${(state.projectMembers||[]).length})</div>
+          <div style="font-size:11.5px;color:var(--ink-soft);margin-bottom:8px;line-height:1.5;">Seuls les membres listés (plus le chef et le créateur) voient ce projet.</div>
+          <div style="max-height:168px;overflow-y:auto;">
+          ${(state.projectMembers||[]).map(m=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px;">
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.user?m.user.full_name||m.user.email:"—")}</span>
+              ${manage?`<button class="btn tiny danger" data-action="member-del" data-id="${m.id}" style="flex:0 0 auto;">Retirer</button>`:""}
+            </div>`).join("")||`<div style="font-size:12px;color:var(--ink-soft);">Aucun membre.</div>`}
+          </div>
+          ${manage?`<div style="display:flex;align-items:center;gap:6px;margin-top:10px;flex-wrap:nowrap;">
+            <select id="pm-user" style="flex:1 1 auto;min-width:0;font-size:12.5px;padding:6px 4px;"><option value="">— ajouter un membre —</option>${(state.profilesList||[]).filter(u=>!(state.projectMembers||[]).some(m=>m.user_id===u.id)).map(u=>`<option value="${u.id}">${esc(displayName(u))}</option>`).join("")}</select>
+            <button class="btn tiny" data-action="member-add" data-id="${p.id}" style="flex:0 0 auto;">Ajouter</button>
+          </div><div id="pm-err"></div>`:""}
+        </div>
+
+        ${manage?`<div style="flex:1 1 230px;min-width:0;">
+          <div class="section-label">Pilotage</div>
+          <div style="font-size:11.5px;color:var(--ink-soft);margin-bottom:6px;">Statut</div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:nowrap;">
+            <select id="pj-status-upd" style="flex:1 1 auto;min-width:0;font-size:12.5px;padding:6px 4px;">${statusOpts}</select>
+            <button class="btn tiny" data-action="project-status" data-id="${p.id}" style="flex:0 0 auto;">Appliquer</button>
+          </div>
+          <div style="font-size:11.5px;color:var(--ink-soft);margin:12px 0 6px;">Avancement (%)</div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:nowrap;">
+            <input type="text" id="pj-prog" value="${Number(p.progress_pct)||0}" style="flex:0 0 66px;width:66px;font-size:12.5px;padding:6px 8px;">
+            <button class="btn tiny" data-action="project-progress" data-id="${p.id}" style="flex:0 0 auto;">Mettre à jour</button>
+          </div>
+        </div>`:""}
+
       </div>
-      <div class="card"><div class="section-label">Équipe du projet (${(state.projectMembers||[]).length})</div>
-        <div class="hint" style="font-size:12px;">Seuls les membres listés ici (plus le chef et le créateur) peuvent voir et interagir avec ce projet.</div>
-        ${(state.projectMembers||[]).map(m=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px;">
-            <span>${esc(m.user?m.user.full_name||m.user.email:"—")}</span>
-            ${manage?`<button class="btn tiny danger" data-action="member-del" data-id="${m.id}">Retirer</button>`:""}
-          </div>`).join("")||`<div class="hint" style="font-size:12px;">Aucun membre.</div>`}
-        ${manage?`<div class="btn-row" style="margin-top:10px;align-items:center;">
-          <select id="pm-user" style="font-size:12.5px;padding:6px 8px;"><option value="">— ajouter un membre —</option>${(state.profilesList||[]).filter(u=>!(state.projectMembers||[]).some(m=>m.user_id===u.id)).map(u=>`<option value="${u.id}">${esc(displayName(u))}</option>`).join("")}</select>
-          <button class="btn tiny" data-action="member-add" data-id="${p.id}">Ajouter</button>
-        </div><div id="pm-err"></div>`:""}
-      </div>
-      ${manage?`<div class="card"><div class="section-label">Pilotage</div>
-        <div class="field"><label for="pj-status-upd">Statut</label><div class="btn-row"><select id="pj-status-upd" style="max-width:200px;">${statusOpts}</select><button class="btn tiny" data-action="project-status" data-id="${p.id}">Appliquer</button></div></div>
-        <div class="field" style="margin-top:10px;"><label for="pj-prog">Avancement (%)</label><div class="btn-row"><input type="text" id="pj-prog" value="${Number(p.progress_pct)||0}" style="max-width:100px;"><button class="btn tiny" data-action="project-progress" data-id="${p.id}">Mettre à jour</button></div></div>
-      </div>`:""}
     </div>
     ${renderProjectTasks(p)}`;
 }
@@ -2231,12 +2250,21 @@ function renderProjectTasks(p){
       <div class="field"><label>Responsable</label><select id="pj-t-asg">${asgFilterOpts}</select></div>
       ${filterActive?`<button class="btn tiny secondary" data-action="pj-t-clear" style="align-self:flex-end;">Effacer les filtres</button>`:""}
     </div>`;
-  return `<div class="card" style="margin-top:16px;"><div class="section-label">Planning (Gantt)</div>${renderGantt(allTasks)}</div>
-    <div class="card" style="margin-top:16px;"><div class="section-label">Tâches (${tasks.length}${filterActive?` / ${allTasks.length}`:""})</div>
+  const ganttOpen=!!state.ganttOpen;
+  const datedCount=allTasks.filter(t=>t.start_date&&t.end_date).length;
+  return `<div class="card" style="margin-top:16px;"><div class="section-label">Phases & tâches (${tasks.length}${filterActive?` / ${allTasks.length}`:""})</div>
       ${filterBar}
       ${phaseAdd}
       ${tasks.length||phases.length?phaseBlocks:`<div class="empty-state">Aucune tâche.</div>`}
-      ${addForm}
+    </div>
+    ${addForm}
+    <div class="card" style="margin-top:16px;padding:${ganttOpen?"14px 16px":"11px 14px"};">
+      <div data-action="gantt-toggle" style="cursor:pointer;display:flex;align-items:center;gap:8px;">
+        <span style="color:var(--ink-faint);font-size:11px;">${ganttOpen?"▼":"▶"}</span>
+        <strong style="font-size:13px;">Avancement des tâches — planning</strong>
+        <span style="font-size:11.5px;color:var(--ink-soft);margin-left:auto;">${datedCount} tâche(s) datée(s)</span>
+      </div>
+      ${ganttOpen?`<div class="pj-expand" style="margin-top:12px;">${renderGantt(allTasks)}</div>`:""}
     </div>`;
 }
 function ganttScale(totalDays){
@@ -3309,6 +3337,7 @@ async function onAction(e){
     return;
   }
   if(action==="pj-t-clear"){ state.taskFilter={q:"",status:"all",asg:"all"}; render(); return; }
+  if(action==="gantt-toggle"){ state.ganttOpen=!state.ganttOpen; render(); return; }
   if(action==="task-add-toggle"){ state.taskAddOpen=!state.taskAddOpen; render(); return; }
   if(action==="phase-toggle"){ const id=el.dataset.id; state.expandedPhases[id]=!state.expandedPhases[id]; render(); return; }
   if(action==="task-toggle"){ state.expandedTaskId = state.expandedTaskId===el.dataset.id ? null : el.dataset.id; render(); return; }
