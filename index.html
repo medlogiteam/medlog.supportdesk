@@ -234,7 +234,7 @@ let state = {
   poReceipts:[], receivedByItem:{}, poReceiving:false,
   projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[],
   meetings:[], meetingsLoaded:false, meetingFilter:{status:"all", scope:"mine", search:""}, selectedMeetingId:null, meetingNew:false, meetingParts:[], meetingLinks:[], meetingActions:[], meetView:"list", meetMonth:null, myLateActions:0, myMeetActions:[],
-  projectsSubview:"projects", taskAddOpen:false, taskFilter:{q:"", status:"all", asg:"all"}, projectPhases:[], taskChecklists:{}, expandedPhases:{}, expandedTaskId:null, ganttZoom:"auto", ganttPxFit:null, ganttScroll:null, projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
+  projectsSubview:"projects", taskAddOpen:false, projectMilestones:[], projectActivity:[], msAddOpen:false, taskFilter:{q:"", status:"all", asg:"all"}, projectPhases:[], taskChecklists:{}, expandedPhases:{}, expandedTaskId:null, ganttZoom:"auto", ganttPxFit:null, ganttScroll:null, projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
   myTickets:[], myActivities:[], myTasksLoaded:false, myOpenTicketId:null, myOpenActivityId:null, unseenMentions:0,
   execLoaded:false, execData:null,
   reportSource:"tickets", reportFilters:{}, reportRows:null, reportRunning:false, reportError:null,
@@ -2022,6 +2022,149 @@ function renderProjectForm(){
       <button class="btn" data-action="submit-project">Créer le projet</button>
     </div>`;
 }
+// =========================== PROJETS — COMMAND CENTER (v4) ===========================
+// Santé du projet : heuristique explicite, lisible et justifiée à l'écran.
+function projectHealth(p){
+  const ts=state.projectTasks||[];
+  const today=new Date(); today.setHours(0,0,0,0);
+  const isOpen=t=>t.status!=="Done";
+  const late=ts.filter(t=>isOpen(t) && t.end_date && new Date(t.end_date)<today);
+  const blocked=ts.filter(t=>t.status==="Blocked");
+  const msMissed=(state.projectMilestones||[]).filter(m=>m.status!=="Atteint" && new Date(m.due_date)<today);
+  const projLate = p.end_date && !["Completed","Cancelled"].includes(p.status) && new Date(p.end_date)<today;
+  const openCount=ts.filter(isOpen).length;
+  const reasons=[]; let level="ok";
+  if(projLate){ level="risk"; reasons.push("échéance du projet dépassée"); }
+  if(blocked.length){ level="risk"; reasons.push(`${blocked.length} tâche(s) bloquée(s)`); }
+  if(msMissed.length){ if(level!=="risk") level="warn"; reasons.push(`${msMissed.length} jalon(s) manqué(s)`); }
+  if(late.length){ if(level!=="risk") level="warn"; reasons.push(`${late.length} tâche(s) en retard`); }
+  if(openCount && late.length/Math.max(1,openCount) > 0.3){ level="risk"; }
+  if(["Completed"].includes(p.status)){ level="ok"; reasons.length=0; reasons.push("projet clôturé"); }
+  return { level, late, blocked, msMissed, projLate,
+    label: level==="risk"?"Critique":level==="warn"?"Attention":"Sain",
+    color: level==="risk"?"var(--critical)":level==="warn"?"#B45309":"#15803D",
+    reasons: reasons.length?reasons:["aucun retard ni blocage"] };
+}
+function currentPhase(){
+  const phases=(state.projectPhases||[]).slice();
+  for(const ph of phases){
+    const ts=(state.projectTasks||[]).filter(t=>t.phase_id===ph.id);
+    if(ts.length && phasePct(ts)<100) return { ph, pct:phasePct(ts) };
+  }
+  const last=phases[phases.length-1];
+  return last?{ ph:last, pct:phasePct((state.projectTasks||[]).filter(t=>t.phase_id===last.id)) }:null;
+}
+function nextMilestone(){
+  const today=new Date(); today.setHours(0,0,0,0);
+  const open=(state.projectMilestones||[]).filter(m=>m.status!=="Atteint");
+  const future=open.filter(m=>new Date(m.due_date)>=today).sort((a,b)=>a.due_date.localeCompare(b.due_date));
+  if(future.length) return { m:future[0], overdue:false };
+  const past=open.sort((a,b)=>b.due_date.localeCompare(a.due_date));
+  return past.length?{ m:past[0], overdue:true }:null;
+}
+function daysTo(d){ const x=new Date(d+"T00:00:00"), t=new Date(); t.setHours(0,0,0,0); return Math.round((x-t)/86400000); }
+function actLabel(a){
+  const who=a.actor?esc(a.actor.full_name):"—";
+  const m={ task_created:"a créé la tâche", task_status:"a changé le statut de", phase_created:"a créé la phase",
+    member_added:"a ajouté au projet", milestone_created:"a créé le jalon", milestone_reached:"a mis à jour le jalon",
+    project_status:"a changé le statut du projet" }[a.type]||a.type;
+  return `<strong>${who}</strong> ${m} <em>${esc(a.subject||"")}</em>${a.detail?` <span style="color:var(--ink-soft);">(${esc(a.detail)})</span>`:""}`;
+}
+function renderCommandCenter(p){
+  const manage=canManageProjects();
+  const h=projectHealth(p);
+  const ts=state.projectTasks||[];
+  const today=new Date(); today.setHours(0,0,0,0);
+  const in7=new Date(today); in7.setDate(in7.getDate()+7);
+  const soon=ts.filter(t=>t.status!=="Done" && t.end_date && new Date(t.end_date)>=today && new Date(t.end_date)<=in7);
+  const done=ts.filter(t=>t.status==="Done").length;
+  const cp=currentPhase(), nm=nextMilestone();
+
+  // --- Bandeau santé ---
+  const banner=`<div class="card" style="border-left:4px solid ${h.color};padding:14px 18px;">
+    <div style="display:flex;flex-wrap:wrap;gap:26px;align-items:center;">
+      <div style="flex:0 0 auto;">
+        <div style="font-size:11px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px;">Santé</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:3px;">
+          <span style="width:11px;height:11px;border-radius:50%;background:${h.color};display:inline-block;"></span>
+          <strong style="font-size:16px;color:${h.color};">${h.label}</strong>
+        </div>
+        <div style="font-size:11.5px;color:var(--ink-soft);margin-top:3px;" title="Règle : bloquée ou échéance projet dépassée → Critique ; retard ou jalon manqué → Attention">${esc(h.reasons.join(" · "))}</div>
+      </div>
+      <div style="flex:1 1 190px;min-width:0;">
+        <div style="font-size:11px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px;">Avancement</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap;">${progressBar(p.progress_pct)}
+          ${manage?`<button class="btn tiny secondary" data-action="project-recalc" data-id="${p.id}" title="Moyenne de l'avancement des tâches">Recalculer</button>`:""}</div>
+      </div>
+      <div style="flex:0 1 190px;min-width:0;">
+        <div style="font-size:11px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px;">Phase courante</div>
+        <div style="font-size:13.5px;font-weight:600;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${cp?esc(cp.ph.name):"—"}</div>
+        ${cp?`<div style="font-size:11.5px;color:var(--ink-soft);">${cp.pct}% réalisé</div>`:""}
+      </div>
+      <div style="flex:0 1 200px;min-width:0;">
+        <div style="font-size:11px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px;">Prochain jalon</div>
+        ${nm?`<div style="font-size:13.5px;font-weight:600;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(nm.m.name)}</div>
+             <div style="font-size:11.5px;color:${nm.overdue?"var(--critical)":"var(--ink-soft)"};font-weight:${nm.overdue?"600":"400"};">${esc(nm.m.due_date)} · ${nm.overdue?`en retard de ${Math.abs(daysTo(nm.m.due_date))} j`:`dans ${daysTo(nm.m.due_date)} j`}</div>`
+           :`<div style="font-size:12.5px;color:var(--ink-faint);margin-top:5px;">Aucun jalon défini</div>`}
+      </div>
+    </div></div>`;
+
+  // --- Tuiles d'attention ---
+  const tiles=`<div class="stat-row" style="margin:14px 0;">
+    <div class="stat ${h.late.length?'alert':''}"><div class="n">${h.late.length}</div><div class="l">Tâches en retard</div></div>
+    <div class="stat ${h.blocked.length?'alert':''}"><div class="n">${h.blocked.length}</div><div class="l">Bloquées</div></div>
+    <div class="stat ${soon.length?'accent':''}"><div class="n">${soon.length}</div><div class="l">Échéance < 7 j</div></div>
+    <div class="stat"><div class="n">${done}/${ts.length}</div><div class="l">Terminées</div></div>
+    <div class="stat"><div class="n">${(state.projectMembers||[]).length}</div><div class="l">Membres</div></div>
+    <div class="stat ${h.msMissed.length?'alert':''}"><div class="n">${(state.projectMilestones||[]).filter(m=>m.status!=="Atteint").length}</div><div class="l">Jalons ouverts</div></div>
+  </div>`;
+
+  // --- Ce qui demande attention (liste actionnable) ---
+  const attention=[...h.blocked.map(t=>({t,why:"bloquée",c:"var(--critical)"})),
+                   ...h.late.map(t=>({t,why:`en retard (${Math.abs(daysTo(t.end_date))} j)`,c:"var(--critical)"})),
+                   ...soon.map(t=>({t,why:`échéance dans ${daysTo(t.end_date)} j`,c:"#B45309"}))]
+    .filter((x,i,arr)=>arr.findIndex(y=>y.t.id===x.t.id)===i).slice(0,6);
+  const attentionCard=`<div class="card"><div class="section-label">Demande attention (${attention.length})</div>
+    ${attention.length?attention.map(x=>`<div data-action="task-focus" data-id="${x.t.id}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(x.t.name)}</span>
+        <span style="flex:0 0 auto;font-size:11.5px;color:${x.c};font-weight:600;">${esc(x.why)}</span></div>`).join("")
+      :`<div style="font-size:12.5px;color:#15803D;">Rien ne bloque. ✅</div>`}</div>`;
+
+  // --- Activité récente ---
+  const actCard=`<div class="card"><div class="section-label">Activité récente</div>
+    ${(state.projectActivity||[]).length?`<div style="max-height:210px;overflow-y:auto;">${state.projectActivity.map(a=>`<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12.5px;line-height:1.5;">${actLabel(a)}<div style="font-size:11px;color:var(--ink-faint);">${fmtDate(a.created_at)}</div></div>`).join("")}</div>`
+      :`<div style="font-size:12.5px;color:var(--ink-soft);">Aucune activité enregistrée pour l'instant.</div>`}</div>`;
+
+  // --- Charge d'équipe ---
+  const load={}; ts.filter(t=>t.status!=="Done").forEach(t=>{ const k=t.assignee_id||"_none"; load[k]=(load[k]||0)+1; });
+  const loadRows=Object.keys(load).sort((a,b)=>load[b]-load[a]).map(k=>({label:k==="_none"?"Non affectées":userName(k),count:load[k]}));
+  const loadCard=`<div class="card"><div class="section-label">Charge d'équipe — tâches ouvertes</div>${barList(loadRows)}</div>`;
+
+  // --- Jalons ---
+  const msRows=(state.projectMilestones||[]).map(m=>{
+    const d=daysTo(m.due_date), reached=m.status==="Atteint";
+    const col=reached?"#15803D":(d<0?"var(--critical)":d<=7?"#B45309":"var(--ink-soft)");
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;">
+      <div style="min-width:0;"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${reached?'text-decoration:line-through;color:var(--ink-soft);':''}">${esc(m.name)}</div>
+        <div style="font-size:11.5px;color:${col};">${esc(m.due_date)}${reached?" · atteint":d<0?` · en retard de ${Math.abs(d)} j`:` · dans ${d} j`}</div></div>
+      ${manage?`<div style="display:flex;gap:6px;flex:0 0 auto;">
+        <button class="btn tiny ${reached?'secondary':''}" data-action="ms-toggle" data-id="${m.id}" data-st="${reached?'À venir':'Atteint'}">${reached?'Rouvrir':'Atteint'}</button>
+        ${(isAdmin()||can("projects","delete"))?`<button class="btn tiny danger" data-action="ms-del" data-id="${m.id}">✕</button>`:""}
+      </div>`:""}</div>`;
+  }).join("")||`<div style="font-size:12.5px;color:var(--ink-soft);">Aucun jalon. Définissez les échéances clés du projet.</div>`;
+  const msAdd=manage?`<div style="margin-top:8px;">
+      <div data-action="ms-add-toggle" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--brand-2);padding:4px 2px;">
+        <span style="font-size:11px;">${state.msAddOpen?"▼":"＋"}</span> Ajouter un jalon</div>
+      ${state.msAddOpen?`<div class="pj-expand" style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:nowrap;">
+        <input type="text" id="ms-name" placeholder="Ex. Go Live" style="flex:1 1 auto;min-width:0;font-size:12.5px;padding:6px 8px;">
+        <input type="date" id="ms-date" style="flex:0 0 140px;width:140px;font-size:12.5px;padding:6px 6px;">
+        <button class="btn tiny" data-action="ms-add" data-id="${p.id}" style="flex:0 0 auto;">Ajouter</button>
+      </div><div id="ms-err"></div>`:""}
+    </div>`:"";
+  const msCard=`<div class="card"><div class="section-label">Jalons (${(state.projectMilestones||[]).length})</div>${msRows}${msAdd}</div>`;
+
+  return banner+tiles+`<div class="two-col">${attentionCard}${msCard}</div><div class="two-col">${actCard}${loadCard}</div>`;
+}
 function renderProjectDetail(p){
   const manage=canManageProjects();
   const statusOpts=projectStatuses().map(s=>`<option value="${esc(s)}" ${p.status===s?'selected':''}>${esc(projectStatusLabel(s))}</option>`).join("");
@@ -2029,11 +2172,10 @@ function renderProjectDetail(p){
   return `<div class="detail-header"><div><span class="ticket-id">${esc(p.project_no||"")}</span><h2>${esc(p.name)}</h2>
       <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;">${p.manager?`<span>Chef : ${esc(p.manager.full_name)}</span>`:""}${p.location?`<span>${esc(p.location.name)}</span>`:""}${p.start_date?`<span>Début ${esc(p.start_date)}</span>`:""}${p.end_date?`<span>Échéance ${esc(p.end_date)}</span>`:""}</div></div>
       <div style="display:flex;gap:8px;align-items:center;">${p.priority?`<span class="badge priority-${p.priority}">${esc(p.priority)}</span>`:""}${projectStatusBadge(p.status)}${late?`<span class="badge overdue">En retard</span>`:""}</div></div>
-    <div class="two-col">
+    ${renderCommandCenter(p)}
+    <div class="two-col" style="margin-top:16px;">
       <div class="card"><div class="section-label">Présentation</div>
         <div style="font-size:13.5px;line-height:1.8;">${p.description?esc(p.description):"<span style='color:var(--ink-soft)'>Aucune description.</span>"}</div>
-        <div style="margin-top:14px;display:flex;align-items:center;gap:10px;">${progressBar(p.progress_pct)}${manage?`<button class="btn tiny secondary" data-action="project-recalc" data-id="${p.id}" title="Moyenne de l'avancement des tâches">Recalculer depuis les tâches</button>`:""}</div>
-        ${(()=>{const ts=state.projectTasks||[];if(!ts.length)return "";const done=ts.filter(t=>t.status==="Done").length;const lt=ts.filter(t=>t.status!=="Done"&&t.end_date&&new Date(t.end_date)<new Date()).length;return `<div class="meta" style="margin-top:10px;font-size:12.5px;color:var(--ink-soft);">${done}/${ts.length} tâche(s) terminée(s)${lt?` · <span style="color:var(--critical);font-weight:600;">${lt} en retard</span>`:""}</div>`;})()}
       </div>
       <div class="card"><div class="section-label">Équipe du projet (${(state.projectMembers||[]).length})</div>
         <div class="hint" style="font-size:12px;">Seuls les membres listés ici (plus le chef et le créateur) peuvent voir et interagir avec ce projet.</div>
@@ -2064,6 +2206,11 @@ async function loadProjectTasks(pid){
   state.projectMembers=mb.data||[];
   state.projectPhases=ph;
   state.taskChecklists={};
+  // Couche pilotage (Command Center) : jalons + fil d'activité.
+  try{ const { data:ms } = await sb.from("project_milestones").select("*").eq("project_id",pid).order("due_date");
+    state.projectMilestones=ms||[]; }catch(_){ state.projectMilestones=[]; }
+  try{ const { data:ac } = await sb.from("project_activity").select("*, actor:actor_id(full_name)").eq("project_id",pid).order("created_at",{ascending:false}).limit(12);
+    state.projectActivity=ac||[]; }catch(_){ state.projectActivity=[]; }
   const tids=state.projectTasks.map(t=>t.id);
   if(tids.length){
     try{ const { data: items } = await sb.from("task_checklist_items").select("*, assignee:assignee_id(full_name)").in("task_id",tids).order("position").order("created_at");
@@ -3309,6 +3456,42 @@ async function onAction(e){
     return;
   }
   if(action==="pj-t-clear"){ state.taskFilter={q:"",status:"all",asg:"all"}; render(); return; }
+  if(action==="ms-add-toggle"){ state.msAddOpen=!state.msAddOpen; render(); return; }
+  if(action==="ms-add"){
+    const name=((document.getElementById("ms-name")||{value:""}).value||"").trim();
+    const due=(document.getElementById("ms-date")||{value:""}).value||null;
+    const errb=document.getElementById("ms-err");
+    if(!name||!due){ if(errb) errb.innerHTML=`<div class="error-msg">Nom et date du jalon obligatoires.</div>`; return; }
+    busy("Ajout…");
+    try{ const pos=(state.projectMilestones||[]).length;
+      const { error } = await sb.from("project_milestones").insert({ project_id:el.dataset.id, name, due_date:due, position:pos, created_by:uid() });
+      if(error) throw error;
+      state.msAddOpen=false; await loadProjectTasks(el.dataset.id);
+    }catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
+  if(action==="ms-toggle"){
+    const st=el.dataset.st;
+    busy("…");
+    try{ await sb.from("project_milestones").update({ status:st, reached_at: st==="Atteint"?new Date().toISOString():null }).eq("id",el.dataset.id);
+      await loadProjectTasks(state.selectedProjectId); unbusy(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="ms-del"){
+    if(!confirm("Supprimer ce jalon ?")) return;
+    busy("…");
+    try{ await sb.from("project_milestones").delete().eq("id",el.dataset.id); await loadProjectTasks(state.selectedProjectId); unbusy(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="task-focus"){
+    const t=(state.projectTasks||[]).find(x=>x.id===el.dataset.id);
+    if(t && t.phase_id) state.expandedPhases[t.phase_id]=true; else state.expandedPhases["_none"]=true;
+    state.expandedTaskId=el.dataset.id; render();
+    setTimeout(()=>{ const n=document.querySelector(`[data-action="task-toggle"][data-id="${el.dataset.id}"]`); if(n) n.scrollIntoView({behavior:"smooth",block:"center"}); },80);
+    return;
+  }
   if(action==="task-add-toggle"){ state.taskAddOpen=!state.taskAddOpen; render(); return; }
   if(action==="phase-toggle"){ const id=el.dataset.id; state.expandedPhases[id]=!state.expandedPhases[id]; render(); return; }
   if(action==="task-toggle"){ state.expandedTaskId = state.expandedTaskId===el.dataset.id ? null : el.dataset.id; render(); return; }
