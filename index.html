@@ -234,7 +234,7 @@ let state = {
   poReceipts:[], receivedByItem:{}, poReceiving:false,
   projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[],
   meetings:[], meetingsLoaded:false, meetingFilter:{status:"all", scope:"mine", search:""}, selectedMeetingId:null, meetingNew:false, meetingParts:[], meetingLinks:[], meetingActions:[], meetView:"list", meetMonth:null, myLateActions:0, myMeetActions:[],
-  projectsSubview:"projects", taskFilter:{q:"", status:"all", asg:"all"}, projectPhases:[], taskChecklists:{}, expandedPhases:{}, expandedTaskId:null, ganttZoom:"auto", ganttPxFit:null, ganttScroll:null, projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
+  projectsSubview:"projects", taskAddOpen:false, taskFilter:{q:"", status:"all", asg:"all"}, projectPhases:[], taskChecklists:{}, expandedPhases:{}, expandedTaskId:null, ganttZoom:"auto", ganttPxFit:null, ganttScroll:null, projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
   myTickets:[], myActivities:[], myTasksLoaded:false, myOpenTicketId:null, myOpenActivityId:null, unseenMentions:0,
   execLoaded:false, execData:null,
   reportSource:"tickets", reportFilters:{}, reportRows:null, reportRunning:false, reportError:null,
@@ -2141,30 +2141,33 @@ function renderProjectTasks(p){
         ${pctSel}${delBtn}</div>`;
     }).join("")||`<div class="hint" style="font-size:12px;">Aucun élément — la progression reste manuelle tant que la checklist est vide.</div>`;
     const asgOpts=`<option value="">— responsable —</option>`+(state.profilesList||[]).map(u=>`<option value="${u.id}">${esc(displayName(u))}</option>`).join("");
-    const addItem = canTouch ? `<div class="btn-row" style="margin-top:8px;align-items:center;flex-wrap:wrap;gap:6px;">
-        <input type="text" id="cl-title-${t.id}" placeholder="Nouvel élément…" style="flex:1;min-width:160px;font-size:12.5px;padding:6px 8px;">
-        <select id="cl-asg-${t.id}" style="font-size:12px;padding:6px 8px;">${asgOpts}</select>
-        <button class="btn tiny" data-action="cl-add" data-task="${t.id}">Ajouter</button>
+    const addItem = canTouch ? `<div style="display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:nowrap;">
+        <input type="text" id="cl-title-${t.id}" placeholder="Nouvel élément…" style="flex:1 1 auto;min-width:0;font-size:12.5px;padding:6px 8px;">
+        <select id="cl-asg-${t.id}" style="flex:0 0 150px;width:150px;font-size:12px;padding:6px 4px;">${asgOpts}</select>
+        <button class="btn tiny" data-action="cl-add" data-task="${t.id}" style="flex:0 0 auto;white-space:nowrap;">Ajouter</button>
       </div>` : "";
     const pctCtl = items.length
-      ? `<span style="font-size:12px;color:var(--ink-soft);">Avancement <strong>automatique</strong> (moyenne de la checklist) : ${pct}%</span>`
-      : `<span style="font-size:12px;color:var(--ink-soft);">Avancement</span> <input type="text" id="tk-pg-${t.id}" value="${Number(t.progress_pct)||0}" style="width:58px;font-size:12px;padding:5px 7px;"><span style="font-size:12px;">%</span>`;
+      ? `<span style="font-size:11.5px;color:var(--ink-soft);white-space:nowrap;" title="Moyenne de la checklist">Avanc. auto : <strong>${pct}%</strong></span>`
+      : `<span style="font-size:11.5px;color:var(--ink-soft);">Avanc.</span><input type="text" id="tk-pg-${t.id}" value="${Number(t.progress_pct)||0}" style="flex:0 0 50px;width:50px;font-size:12px;padding:5px 5px;"><span style="font-size:11.5px;color:var(--ink-soft);">%</span>`;
     const delegate = (manage && !linked && laDeps.length) ? `<span style="font-size:12px;color:var(--ink-soft);margin-left:10px;">Déléguer au service</span>
         <select id="tk-dg-${t.id}" style="font-size:12px;padding:5px 7px;"><option value="">— service —</option>${laDeps.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join("")}</select>
         <button class="btn tiny secondary" data-action="task-delegate" data-id="${t.id}" data-name="${esc(t.name)}">Créer l'activité</button>` : "";
-    const dateCtl = manage ? `<span style="font-size:12px;color:var(--ink-soft);margin-left:6px;">Début</span>
-        <input type="date" id="tk-sd-${t.id}" value="${esc(t.start_date||"")}" style="font-size:12px;padding:5px 7px;">
-        <span style="font-size:12px;color:var(--ink-soft);">Fin</span>
-        <input type="date" id="tk-ed-${t.id}" value="${esc(t.end_date||"")}" style="font-size:12px;padding:5px 7px;">` : "";
-    const ctrl = canTouch ? `<div class="btn-row" style="margin-top:10px;flex-wrap:wrap;align-items:center;gap:8px;">
-        <span style="font-size:12px;color:var(--ink-soft);">Statut</span>
-        <select id="tk-st-${t.id}" style="font-size:12px;padding:5px 7px;">${TASK_STATUSES.map(([v,l])=>`<option value="${v}" ${t.status===v?'selected':''}>${l}</option>`).join("")}</select>
+    const dateCtl = manage ? `<span style="font-size:11.5px;color:var(--ink-soft);">Début</span>
+        <input type="date" id="tk-sd-${t.id}" value="${esc(t.start_date||"")}" style="flex:0 0 130px;width:130px;font-size:12px;padding:5px 6px;">
+        <span style="font-size:11.5px;color:var(--ink-soft);">Fin</span>
+        <input type="date" id="tk-ed-${t.id}" value="${esc(t.end_date||"")}" style="flex:0 0 130px;width:130px;font-size:12px;padding:5px 6px;">` : "";
+    const secondary=[
+      (isAdmin()||can("projects","delete"))?`<button class="btn tiny danger" data-action="task-del" data-id="${t.id}">Supprimer</button>`:"",
+      delegate
+    ].filter(Boolean).join("");
+    const ctrl = canTouch ? `<div style="display:flex;align-items:center;gap:7px;margin-top:10px;flex-wrap:wrap;">
+        <span style="font-size:11.5px;color:var(--ink-soft);">Statut</span>
+        <select id="tk-st-${t.id}" style="flex:0 0 126px;width:126px;font-size:12px;padding:5px 5px;">${TASK_STATUSES.map(([v,l])=>`<option value="${v}" ${t.status===v?'selected':''}>${l}</option>`).join("")}</select>
         ${dateCtl}
         ${pctCtl}
-        <button class="btn tiny" data-action="task-save" data-id="${t.id}">Enregistrer</button>
-        ${(isAdmin()||can("projects","delete"))?`<button class="btn tiny danger" data-action="task-del" data-id="${t.id}">Supprimer</button>`:""}
-        ${delegate}
-      </div>` : "";
+        <button class="btn tiny" data-action="task-save" data-id="${t.id}" style="flex:0 0 auto;">Enregistrer</button>
+      </div>
+      ${secondary?`<div style="display:flex;align-items:center;gap:7px;margin-top:8px;flex-wrap:wrap;">${secondary}</div>`:""}` : "";
     return `<div class="ticket-row pj-card" style="cursor:default;display:block;border-left-color:var(--brand-2);">${head}<div class="pj-expand">
       ${t.description?`<div style="font-size:12.5px;color:var(--ink-soft);margin-top:8px;white-space:pre-wrap;">${esc(t.description)}</div>`:""}
       <div style="margin-top:10px;"><div class="section-label" style="font-size:11px;">Checklist (${items.length})</div>${clRows}${addItem}</div>
@@ -2195,7 +2198,13 @@ function renderProjectTasks(p){
     const depOpts=`<option value="">— aucune dépendance —</option>`+tasks.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join("");
     const stOpts=TASK_STATUSES.map(([v,l])=>`<option value="${v}" ${v==="To Do"?"selected":""}>${l}</option>`).join("");
     const phOpts=`<option value="">— sans phase —</option>`+phases.map(ph=>`<option value="${ph.id}">${esc(ph.name)}</option>`).join("");
-    addForm=`<div class="card" style="margin-top:12px;background:var(--surface-2,#fafbfc);"><div class="section-label">Ajouter une tâche</div>
+    const addOpen=!!state.taskAddOpen;
+    addForm=`<div class="card" style="margin-top:12px;background:var(--surface-2,#fafbfc);padding:${addOpen?"14px 16px":"10px 14px"};">
+      <div data-action="task-add-toggle" style="cursor:pointer;display:flex;align-items:center;gap:8px;">
+        <span style="color:var(--ink-faint);font-size:11px;">${addOpen?"▼":"▶"}</span>
+        <strong style="font-size:13px;color:var(--brand);">＋ Ajouter une tâche</strong>
+      </div>
+      ${addOpen?`<div class="pj-expand" style="margin-top:12px;">
       <div class="field"><label for="tk-name">Intitulé</label><input type="text" id="tk-name" placeholder="ex : Câblage salle serveur"></div>
       <div class="field"><label for="tk-desc">Description (contexte, argumentaire)</label><textarea id="tk-desc" rows="2" placeholder="Pourquoi cette tâche, attendus, critères de réussite…"></textarea></div>
       <div class="field-row">
@@ -2210,6 +2219,7 @@ function renderProjectTasks(p){
       <div class="field" style="max-width:220px;"><label for="tk-status">Statut</label><select id="tk-status">${stOpts}</select></div>
       <div id="tk-error"></div>
       <button class="btn" data-action="task-add" data-id="${p.id}">Ajouter la tâche</button>
+      </div>`:""}
     </div>`;
   }
   const asgSet={}; allTasks.forEach(t=>{ if(t.assignee_id) asgSet[t.assignee_id]=true; });
@@ -3299,6 +3309,7 @@ async function onAction(e){
     return;
   }
   if(action==="pj-t-clear"){ state.taskFilter={q:"",status:"all",asg:"all"}; render(); return; }
+  if(action==="task-add-toggle"){ state.taskAddOpen=!state.taskAddOpen; render(); return; }
   if(action==="phase-toggle"){ const id=el.dataset.id; state.expandedPhases[id]=!state.expandedPhases[id]; render(); return; }
   if(action==="task-toggle"){ state.expandedTaskId = state.expandedTaskId===el.dataset.id ? null : el.dataset.id; render(); return; }
   if(action==="phase-add"){
@@ -3743,6 +3754,7 @@ async function onAction(e){
       try{ await sb.from("project_members").upsert({ project_id:pid, user_id:assignee_id, added_by:uid() }, { onConflict:"project_id,user_id", ignoreDuplicates:true }); }catch(_){}
     }
     if(error){ errBox.innerHTML=`<div class="error-msg">${esc(error.message)}</div>`; unbusy(); return; }
+    state.taskAddOpen=false;
     await loadProjectTasks(pid); return;
   }
   if(action==="task-save"){
