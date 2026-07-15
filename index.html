@@ -234,7 +234,7 @@ let state = {
   poReceipts:[], receivedByItem:{}, poReceiving:false,
   projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[],
   meetings:[], meetingsLoaded:false, meetingFilter:{status:"all", scope:"mine", search:""}, selectedMeetingId:null, meetingNew:false, meetingParts:[], meetingLinks:[], meetingActions:[], meetView:"list", meetMonth:null, myLateActions:0, myMeetActions:[],
-  projectsSubview:"projects", taskAddOpen:false, ganttOpen:false, taskFilter:{q:"", status:"all", asg:"all"}, projectPhases:[], taskChecklists:{}, expandedPhases:{}, expandedTaskId:null, ganttZoom:"auto", ganttPxFit:null, ganttScroll:null, projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
+  projectsSubview:"projects", taskAddOpen:false, phaseAddOpen:null, ganttOpen:false, taskFilter:{q:"", status:"all", asg:"all"}, projectPhases:[], taskChecklists:{}, expandedPhases:{}, expandedTaskId:null, ganttZoom:"auto", ganttPxFit:null, ganttScroll:null, projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
   myTickets:[], myActivities:[], myTasksLoaded:false, myOpenTicketId:null, myOpenActivityId:null, unseenMentions:0,
   execLoaded:false, execData:null,
   reportSource:"tickets", reportFilters:{}, reportRows:null, reportRunning:false, reportError:null,
@@ -2193,10 +2193,37 @@ function renderProjectTasks(p){
       ${ctrl}</div></div>`;
   };
 
+  const phaseAddTask=(ph)=>{
+    if(!manage) return "";
+    const o=state.phaseAddOpen===ph.id;
+    const asgO=`<option value="">— responsable —</option>`+(state.profilesList||[]).map(u=>`<option value="${u.id}">${esc(displayName(u))}</option>`).join("");
+    const depO=`<option value="">— aucune dépendance —</option>`+allTasks.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join("");
+    const stO=TASK_STATUSES.map(([v,l])=>`<option value="${v}" ${v==="To Do"?"selected":""}>${l}</option>`).join("");
+    return `<div style="margin-top:6px;">
+      <div data-action="phase-task-toggle" data-phase="${ph.id}" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--brand-2);padding:5px 2px;">
+        <span style="font-size:11px;">${o?"▼":"＋"}</span> Ajouter une tâche
+      </div>
+      ${o?`<div class="pj-expand" style="margin-top:4px;padding:12px 14px;border:1px dashed var(--border);border-radius:10px;background:var(--surface-2);">
+        <div class="field"><label for="tkp-name-${ph.id}">Intitulé</label><input type="text" id="tkp-name-${ph.id}" placeholder="ex : Câblage salle serveur"></div>
+        <div class="field"><label for="tkp-desc-${ph.id}">Description (contexte, argumentaire)</label><textarea id="tkp-desc-${ph.id}" rows="2" placeholder="Pourquoi cette tâche, attendus, critères de réussite…"></textarea></div>
+        <div class="field-row">
+          <div class="field"><label for="tkp-asg-${ph.id}">Responsable</label><select id="tkp-asg-${ph.id}">${asgO}</select></div>
+          <div class="field"><label for="tkp-dep-${ph.id}">Dépend de</label><select id="tkp-dep-${ph.id}">${depO}</select></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label for="tkp-start-${ph.id}">Début</label><input type="date" id="tkp-start-${ph.id}"></div>
+          <div class="field"><label for="tkp-end-${ph.id}">Fin</label><input type="date" id="tkp-end-${ph.id}"></div>
+          <div class="field"><label for="tkp-status-${ph.id}">Statut</label><select id="tkp-status-${ph.id}">${stO}</select></div>
+        </div>
+        <div id="tkp-err-${ph.id}"></div>
+        <button class="btn tiny" data-action="phase-task-add" data-id="${p.id}" data-phase="${ph.id}">Ajouter la tâche</button>
+      </div>`:""}
+    </div>`;
+  };
   const phaseBlocks=groups.map(g=>{
     const open=!!state.expandedPhases[g.ph.id] || filterActive;
     const pct=phasePct(g.tasks);
-    const inner = open ? `<div class="ticket-list pj-expand" style="margin-top:8px;">${g.tasks.map(taskCard).join("")||`<div class="empty-state">Aucune tâche dans cette phase.</div>`}</div>` : "";
+    const inner = open ? `<div class="pj-expand" style="margin-top:8px;"><div class="ticket-list">${g.tasks.map(taskCard).join("")||`<div class="empty-state" style="padding:10px;">Aucune tâche dans cette phase.</div>`}</div>${phaseAddTask(g.ph)}</div>` : "";
     return `<div style="margin-bottom:10px;">
       <div class="pj-phase" data-action="phase-toggle" data-id="${g.ph.id}" style="cursor:pointer;display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;">
         <span style="color:var(--ink-faint);font-size:11px;">${open?"▼":"▶"}</span>
@@ -3338,6 +3365,37 @@ async function onAction(e){
   }
   if(action==="pj-t-clear"){ state.taskFilter={q:"",status:"all",asg:"all"}; render(); return; }
   if(action==="gantt-toggle"){ state.ganttOpen=!state.ganttOpen; render(); return; }
+  if(action==="phase-task-toggle"){
+    const ph=el.dataset.phase;
+    state.phaseAddOpen = state.phaseAddOpen===ph ? null : ph;
+    render(); return;
+  }
+  if(action==="phase-task-add"){
+    const pid=el.dataset.id, ph=el.dataset.phase;
+    const g=(pfx)=>document.getElementById(pfx+ph);
+    const errBox=g("tkp-err-");
+    const name=((g("tkp-name-")||{value:""}).value||"").trim();
+    if(!name){ if(errBox) errBox.innerHTML=`<div class="error-msg">L'intitulé de la tâche est obligatoire.</div>`; return; }
+    const start_date=(g("tkp-start-")||{value:""}).value||null;
+    const end_date=(g("tkp-end-")||{value:""}).value||null;
+    if(start_date && end_date && end_date<start_date){ if(errBox) errBox.innerHTML=`<div class="error-msg">La fin ne peut pas précéder le début.</div>`; return; }
+    const description=((g("tkp-desc-")||{value:""}).value||"").trim()||null;
+    const assignee_id=(g("tkp-asg-")||{value:""}).value||null;
+    const depends_on_task_id=(g("tkp-dep-")||{value:""}).value||null;
+    const status=(g("tkp-status-")||{value:"To Do"}).value;
+    const phase_id = (ph==="_none") ? null : ph;
+    busy("Ajout…");
+    try{
+      const { error } = await sb.from("project_tasks").insert({ project_id:pid, name, description, phase_id, assignee_id, depends_on_task_id, start_date, end_date, status, progress_pct:0 });
+      if(error) throw error;
+      if(assignee_id){
+        try{ await sb.from("project_members").upsert({ project_id:pid, user_id:assignee_id, added_by:uid() }, { onConflict:"project_id,user_id", ignoreDuplicates:true }); }catch(_){}
+      }
+      state.phaseAddOpen=null;
+      await loadProjectTasks(pid);
+    }catch(err){ unbusy(); if(errBox) errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
   if(action==="task-add-toggle"){ state.taskAddOpen=!state.taskAddOpen; render(); return; }
   if(action==="phase-toggle"){ const id=el.dataset.id; state.expandedPhases[id]=!state.expandedPhases[id]; render(); return; }
   if(action==="task-toggle"){ state.expandedTaskId = state.expandedTaskId===el.dataset.id ? null : el.dataset.id; render(); return; }
