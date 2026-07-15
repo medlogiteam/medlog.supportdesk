@@ -243,7 +243,7 @@ let state = {
   poReceipts:[], receivedByItem:{}, poReceiving:false,
   projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[],
   meetings:[], meetingsLoaded:false, meetingFilter:{status:"all", scope:"mine", search:""}, selectedMeetingId:null, meetingNew:false, meetingParts:[], meetingLinks:[], meetingActions:[], meetView:"list", meetMonth:null, myLateActions:0, myMeetActions:[],
-  projectsSubview:"projects", taskAddOpen:false, projectMilestones:[], projectActivity:[], msAddOpen:false, projectRisks:[], projectExpenses:[], riskAddOpen:false, expAddOpen:false, taskComments:{}, taskFilter:{q:"", status:"all", asg:"all"}, projectPhases:[], taskChecklists:{}, expandedPhases:{}, expandedTaskId:null, ganttZoom:"auto", ganttPxFit:null, ganttScroll:null, projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
+  projectsSubview:"projects", taskAddOpen:false, projectMilestones:[], projectActivity:[], msAddOpen:false, projectLoadError:"", projectRisks:[], projectExpenses:[], riskAddOpen:false, expAddOpen:false, taskComments:{}, taskFilter:{q:"", status:"all", asg:"all"}, projectPhases:[], taskChecklists:{}, expandedPhases:{}, expandedTaskId:null, ganttZoom:"auto", ganttPxFit:null, ganttScroll:null, projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
   myTickets:[], myActivities:[], myTasksLoaded:false, myOpenTicketId:null, myOpenActivityId:null, unseenMentions:0,
   execLoaded:false, execData:null,
   reportSource:"tickets", reportFilters:{}, reportRows:null, reportRunning:false, reportError:null,
@@ -2255,6 +2255,7 @@ function renderProjectDetail(p){
   return `<div class="detail-header"><div><span class="ticket-id">${esc(p.project_no||"")}</span><h2>${esc(p.name)}</h2>
       <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;">${p.manager?`<span>Chef : ${esc(p.manager.full_name)}</span>`:""}${p.location?`<span>${esc(p.location.name)}</span>`:""}${p.start_date?`<span>Début ${esc(p.start_date)}</span>`:""}${p.end_date?`<span>Échéance ${esc(p.end_date)}</span>`:""}</div></div>
       <div style="display:flex;gap:8px;align-items:center;">${p.priority?`<span class="badge priority-${p.priority}">${esc(p.priority)}</span>`:""}${projectStatusBadge(p.status)}${late?`<span class="badge overdue">En retard</span>`:""}</div></div>
+    ${state.projectLoadError?`<div class="error-msg" style="margin-bottom:14px;">Les données de ce projet n'ont pas pu être chargées : ${esc(state.projectLoadError)}<br><span style="font-weight:600;">Vos données ne sont pas perdues</span> — il s'agit d'un échec de lecture. Vérifiez que les migrations SQL sont exécutées, puis rechargez la page (Ctrl+Shift+R).</div>`:""}
     ${renderCommandCenter(p)}
     <div class="two-col" style="margin-top:16px;">
       <div class="card"><div class="section-label">Le projet</div>
@@ -2285,6 +2286,7 @@ function renderProjectDetail(p){
 }
 
 async function loadProjectTasks(pid){
+  try{
   const [tk, mb, ph] = await Promise.all([
     sb.from("project_tasks").select("*").eq("project_id",pid).order("start_date",{ascending:true,nullsFirst:false}),
     sb.from("project_members").select("*, user:user_id(full_name,email)").eq("project_id",pid),
@@ -2294,6 +2296,7 @@ async function loadProjectTasks(pid){
   state.projectMembers=mb.data||[];
   state.projectPhases=ph;
   state.taskChecklists={};
+  const tids=state.projectTasks.map(t=>t.id);   // déclaré AVANT toute utilisation
   // Couche pilotage (Command Center) : jalons + fil d'activité.
   try{ const { data:ms } = await sb.from("project_milestones").select("*").eq("project_id",pid).order("due_date");
     state.projectMilestones=ms||[]; }catch(_){ state.projectMilestones=[]; }
@@ -2308,17 +2311,22 @@ async function loadProjectTasks(pid){
     try{ const { data:cm } = await sb.from("task_comments").select("*, author:author_id(full_name)").in("task_id",tids).order("created_at");
       (cm||[]).forEach(c=>{ (state.taskComments[c.task_id]=state.taskComments[c.task_id]||[]).push(c); }); }catch(_){}
   }
-  const tids=state.projectTasks.map(t=>t.id);
   if(tids.length){
     try{ const { data: items } = await sb.from("task_checklist_items").select("*, assignee:assignee_id(full_name)").in("task_id",tids).order("position").order("created_at");
       (items||[]).forEach(it=>{ (state.taskChecklists[it.task_id]=state.taskChecklists[it.task_id]||[]).push(it); }); }catch(_){}
   }
-  const ids=state.projectTasks.map(t=>t.id);
-  if(ids.length){
-    const { data: acts } = await sb.from("service_activities").select("id,status,project_task_id").in("project_task_id",ids);
+  if(tids.length){
+    const { data: acts } = await sb.from("service_activities").select("id,status,project_task_id").in("project_task_id",tids);
     state.taskActivities=acts||[];
   } else state.taskActivities=[];
+  state.projectLoadError="";
   if(state.selectedProjectId===pid) render();
+  }catch(err){
+    // Chargement en échec : on l'AFFICHE au lieu de laisser un écran vide
+    // qui ressemble à une perte de données.
+    state.projectLoadError = err && err.message ? err.message : String(err);
+    if(state.selectedProjectId===pid) render();
+  }
 }
 function renderProjectTasks(p){
   const manage=canManageProjects();
