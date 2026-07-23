@@ -166,6 +166,20 @@
   .pj-phase:hover{box-shadow:0 3px 10px rgba(15,30,55,.08);}
   .pj-card{border-radius:12px !important;border:1px solid var(--border);box-shadow:0 1px 3px rgba(15,30,55,.05);transition:box-shadow .18s ease, transform .18s ease;padding:14px 16px;}
   .pj-card:hover{box-shadow:0 6px 18px rgba(15,30,55,.10);transform:translateY(-1px);}
+  .tl{position:relative;padding-left:24px;}
+  .tl:before{content:"";position:absolute;left:5px;top:6px;bottom:6px;width:2px;background:var(--border);}
+  .tl-item{position:relative;padding:9px 0;}
+  .tl-item+.tl-item{border-top:1px solid var(--border);}
+  .tl-dot{position:absolute;left:-24px;top:14px;width:12px;height:12px;border-radius:50%;border:2px solid var(--surface);box-shadow:0 0 0 1px var(--border);}
+  table.dense{width:100%;border-collapse:collapse;font-size:13px;}
+  table.dense th{text-align:left;padding:9px 10px;border-bottom:2px solid var(--border);font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--ink-soft);cursor:pointer;white-space:nowrap;user-select:none;}
+  table.dense th:hover{color:var(--brand);}
+  table.dense th .sar{color:var(--brand-2);font-size:9px;margin-left:3px;}
+  table.dense td{padding:7px 10px;border-bottom:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:210px;}
+  table.dense tbody tr{cursor:pointer;transition:background .12s ease;}
+  table.dense tbody tr:hover{background:var(--surface-2);}
+  table.dense .row-act{display:inline-flex;gap:5px;opacity:0;transition:opacity .15s ease;}
+  table.dense tbody tr:hover .row-act{opacity:1;}
   .pj-task{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--ink-faint);border-radius:12px;padding:13px 15px;box-shadow:0 1px 3px rgba(15,30,55,.05);transition:box-shadow .18s ease, transform .18s ease, border-color .18s ease;}
   .pj-task:hover{box-shadow:0 6px 18px rgba(15,30,55,.10);transform:translateY(-1px);}
   .pj-task:hover .pj-actions{opacity:1;}
@@ -234,8 +248,8 @@ let state = {
   dashPeriod:"all", customFrom:"", customTo:"",
   maintSubview:"annonces", lookupType:"service",
   adminUsers:[], usersLoaded:false,
-  assets:[], assetCats:[], assetsLoaded:false, assetsSubview:"dashboard", assetFilter:{cat:"all", status:"all", search:"", loc:"all", preset:"all"},
-  selectedAssetId:null, assetNew:false, assetMovements:[], profilesList:[],
+  assets:[], assetCats:[], assetsLoaded:false, assetsSubview:"dashboard", assetSort:{col:"asset_tag", dir:"asc"}, assetPage:1, assetFilter:{cat:"all", status:"all", search:"", loc:"all", preset:"all"},
+  selectedAssetId:null, assetNew:false, assetEditOpen:false, assetMovements:[], profilesList:[],
   stockItems:[], stockLoaded:false, stockSubview:"inventory", stockSearch:"", stockMoves:[], locations:[], locationsLoaded:false,
   selectedStockId:null, stockNew:false,
   prs:[], prLoaded:false, prItems:[], selectedPrId:null, prNew:false, prDraftItems:[], departments:[], departmentsLoaded:false,
@@ -852,17 +866,21 @@ const REPORTS = {
       {type:"daterange", field:"created_at", label:"Période (création)"},
       {type:"text", field:"subject", label:"Sujet contient"} ] },
   assets: { label:"Actifs (parc)", table:"assets",
-    select:"*, category:category_id(name), location:location_id(name), assigned:assigned_user_id(full_name)", dateField:"created_at",
+    select:"*, category:category_id(name), location:location_id(name), assigned:assigned_user_id(full_name), brand:brand_id(name), model:model_id(name)", dateField:"created_at",
     columns:[
       {k:"Tag", g:r=>r.asset_tag}, {k:"Désignation", g:r=>r.name},
-      {k:"Catégorie", g:r=>r.category?r.category.name:""}, {k:"Statut", g:r=>r.status},
-      {k:"Marque", g:r=>r.brand}, {k:"Modèle", g:r=>r.model},
-      {k:"N° série", g:r=>r.serial}, {k:"Site", g:r=>r.location?r.location.name:""},
-      {k:"Affecté à", g:r=>r.assigned?r.assigned.full_name:""}, {k:"Garantie", g:r=>dOnly(r.warranty_expiry)} ],
+      {k:"Catégorie", g:r=>r.category?r.category.name:""}, {k:"Statut", g:r=>assetStatusLabel(r.status)},
+      {k:"Marque", g:r=>r.brand?r.brand.name:""}, {k:"Modèle", g:r=>r.model?r.model.name:""},
+      {k:"N° série", g:r=>r.serial_no}, {k:"Site", g:r=>r.location?r.location.name:""},
+      {k:"Affecté à", g:r=>r.assigned?r.assigned.full_name:""},
+      {k:"Type de propriété", g:r=>r.owner_type}, {k:"Date d'achat", g:r=>dOnly(r.purchase_date)},
+      {k:"Garantie", g:r=>dOnly(r.warranty_expiry)}, {k:"Coût", g:r=>r.cost!=null?num(r.cost):""},
+      {k:"Notes", g:r=>r.notes} ],
     filters:[
-      {type:"select", field:"status", label:"Statut", opts:()=>["In Stock","Assigned","In Repair","Retired"]},
+      {type:"select", field:"status", label:"Statut", opts:()=>assetStatuses()},
       {type:"text", field:"name", label:"Désignation contient"},
-      {type:"text", field:"brand", label:"Marque contient"} ] },
+      {type:"text", field:"_bm", label:"Marque / modèle contient"},
+      {type:"text", field:"_serial", label:"N° de série contient"} ] },
   stock: { label:"Stock", table:"stock_items", baseEq:{is_active:true},
     select:"*, category:category_id(name), location:location_id(name)", dateField:"name",
     columns:[
@@ -952,6 +970,10 @@ async function runReport(){
     let { data, error } = await q; if(error) throw error;
     data=data||[];
     if(f._lowstock==="yes") data=data.filter(r=>num(r.quantity)<num(r.min_threshold));
+    if(f._bm && f._bm.trim()){ const q=f._bm.trim().toLowerCase();
+      data=data.filter(r=>(((r.brand&&r.brand.name)||"")+" "+((r.model&&r.model.name)||"")).toLowerCase().includes(q)); }
+    if(f._serial && f._serial.trim()){ const q=f._serial.trim().toLowerCase();
+      data=data.filter(r=>(r.serial_no||"").toLowerCase().includes(q)); }
     state.reportRows=data; state.reportRunning=false; render();
   }catch(e){ state.reportRunning=false; state.reportError="Erreur : "+(e.message||String(e)); render(); }
 }
@@ -1329,10 +1351,42 @@ function renderAssetList(){
       ${active.map(x=>`<span class="badge svc">${esc(x)}</span>`).join("")}
       <button class="btn tiny secondary" data-action="asset-filter-clear">Effacer</button></div>`:"";
   const newBtn=canEditAssets()?`<button class="btn secondary" data-action="asset-new">+ Nouvel actif</button>`:"";
-  const rows=list.map(a=>`<div class="ticket-row" data-action="open-asset" data-id="${a.id}">
-    <div class="col-main"><div class="subject">${esc(a.name)} <span class="ticket-id">${esc(a.asset_tag||"")}</span></div>
-      <div class="meta"><span class="badge svc">${esc(a.category?a.category.name:catName(a.category_id))}</span>${(a.brand||a.model)?`<span>${esc([a.brand?a.brand.name:"",a.model?a.model.name:""].filter(Boolean).join(" "))}</span>`:""}<span>${a.serial_no?("S/N "+esc(a.serial_no)):""}</span><span>${a.location?esc(a.location.name):""}</span>${a.assigned?`<span>→ ${esc(a.assigned.full_name)}</span>`:""}</div></div>
-    <div class="col-status">${assetStatusBadge(a.status)}</div></div>`).join("");
+  const sorted=sortAssets(list.slice());
+  const PAGE=50, total=sorted.length, pages=Math.max(1,Math.ceil(total/PAGE));
+  const page=Math.min(Math.max(1,state.assetPage||1), pages);
+  const slice=sorted.slice((page-1)*PAGE, page*PAGE);
+  const t=assetTodayISO(), soon=assetSoonISO();
+  const COLS=[["asset_tag","Tag"],["name","Désignation"],["category","Catégorie"],["brand","Marque / Modèle"],
+    ["serial","N° série"],["location","Site"],["assigned","Affecté à"],["warranty","Garantie"],["status","Statut"]];
+  const head=`<tr>${COLS.map(([k,l])=>`<th data-action="asset-sort" data-col="${k}">${l}${state.assetSort.col===k?`<span class="sar">${state.assetSort.dir==="asc"?"▲":"▼"}</span>`:""}</th>`).join("")}<th style="cursor:default;"></th></tr>`;
+  const warrCell=a=>{ if(!a.warranty_expiry) return `<span style="color:var(--ink-faint);">—</span>`;
+    const col = a.warranty_expiry<t ? "var(--critical)" : (a.warranty_expiry<=soon ? "#B45309" : "var(--ink-soft)");
+    return `<span style="color:${col};${a.warranty_expiry<t?"font-weight:600;":""}">${esc(a.warranty_expiry)}</span>`; };
+  const rows=slice.map(a=>{
+    const bm=[a.brand?a.brand.name:"", a.model?a.model.name:""].filter(Boolean).join(" ");
+    const quick=canEditAssets()?`<span class="row-act">
+        ${a.assigned_user_id?`<button class="pj-ico" data-action="asset-return" data-id="${a.id}" title="Retour en stock">↩</button>`:""}
+        <button class="pj-ico" data-action="open-asset" data-id="${a.id}" title="Ouvrir la fiche">✏</button>
+      </span>`:"";
+    return `<tr data-action="open-asset" data-id="${a.id}">
+      <td style="font-family:var(--mono);font-size:12px;">${esc(a.asset_tag||"—")}</td>
+      <td style="font-weight:600;" title="${esc(a.name)}">${esc(a.name)}</td>
+      <td style="color:var(--ink-soft);">${esc(a.category?a.category.name:catName(a.category_id))}</td>
+      <td style="color:var(--ink-soft);" title="${esc(bm)}">${esc(bm||"—")}</td>
+      <td style="font-family:var(--mono);font-size:11.5px;color:var(--ink-soft);">${esc(a.serial_no||"—")}</td>
+      <td style="color:var(--ink-soft);">${esc(a.location?a.location.name:"—")}</td>
+      <td>${a.assigned?esc(a.assigned.full_name):`<span style="color:var(--ink-faint);">—</span>`}</td>
+      <td style="font-size:12px;">${warrCell(a)}</td>
+      <td>${assetStatusBadge(a.status)}</td>
+      <td style="text-align:right;">${quick}</td></tr>`;
+  }).join("");
+  const pager=pages>1?`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;flex-wrap:wrap;">
+      <span style="font-size:12px;color:var(--ink-soft);">${(page-1)*PAGE+1}–${Math.min(page*PAGE,total)} sur ${total}</span>
+      <div class="btn-row">
+        <button class="btn tiny secondary" data-action="asset-page" data-p="${page-1}" ${page<=1?"disabled":""}>◀</button>
+        <span style="font-size:12.5px;">page ${page} / ${pages}</span>
+        <button class="btn tiny secondary" data-action="asset-page" data-p="${page+1}" ${page>=pages?"disabled":""}>▶</button>
+      </div></div>`:"";
   return `<h1 class="page-title">Registre des actifs</h1><p class="page-sub">${list.length} actif(s) affiché(s)${list.length!==state.assets.length?` sur ${state.assets.length}`:""}.</p>
     ${chip}
     <div class="filters">
@@ -1340,9 +1394,41 @@ function renderAssetList(){
       <div class="field"><label>Site</label><select id="af-loc">${locOpts}</select></div>
       <div class="field"><label>Statut</label><select id="af-status">${statusOpts}</select></div>
       <div class="field search"><label>Recherche</label><input type="text" id="af-search" placeholder="Tag, nom, série, marque…" value="${esc(f.search)}"></div>
+      <button class="btn tiny secondary" data-action="asset-export" style="align-self:flex-end;">Exporter CSV</button>
       ${newBtn}
     </div>
-    ${list.length?`<div class="ticket-list">${rows}</div>`:`<div class="empty-state">Aucun actif ne correspond.</div>`}`;
+    ${total?`<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;background:var(--surface);"><table class="dense"><thead>${head}</thead><tbody>${rows}</tbody></table></div>${pager}`:`<div class="empty-state">Aucun actif ne correspond.</div>`}`;
+}
+function sortAssets(list){
+  const {col,dir}=state.assetSort||{col:"asset_tag",dir:"asc"};
+  const v=a=>{
+    if(col==="asset_tag") return (a.asset_tag||"").toLowerCase();
+    if(col==="name") return (a.name||"").toLowerCase();
+    if(col==="category") return (a.category?a.category.name:catName(a.category_id)||"").toLowerCase();
+    if(col==="brand") return [a.brand?a.brand.name:"",a.model?a.model.name:""].join(" ").toLowerCase();
+    if(col==="serial") return (a.serial_no||"").toLowerCase();
+    if(col==="location") return (a.location?a.location.name:"").toLowerCase();
+    if(col==="assigned") return (a.assigned?a.assigned.full_name:"").toLowerCase();
+    if(col==="warranty") return a.warranty_expiry||"9999-12-31";
+    if(col==="status") return assetStatusLabel(a.status||"").toLowerCase();
+    return "";
+  };
+  const m=dir==="asc"?1:-1;
+  return list.sort((x,y)=>{ const a=v(x), b=v(y); return a<b?-m:a>b?m:0; });
+}
+function exportAssetsCSV(){
+  const list=sortAssets(assetFiltered().slice());
+  const cols=["Tag","Designation","Categorie","Marque","Modele","N série","Site","Affecte a","Statut","Garantie","Type","Date achat","Cout"];
+  const rows=list.map(a=>[a.asset_tag||"", a.name||"", a.category?a.category.name:catName(a.category_id)||"",
+    a.brand?a.brand.name:"", a.model?a.model.name:"", a.serial_no||"", a.location?a.location.name:"",
+    a.assigned?a.assigned.full_name:"", assetStatusLabel(a.status||""), a.warranty_expiry||"",
+    a.owner_type||"", a.purchase_date||"", a.cost!=null?a.cost:""]);
+  const cell=x=>{ const v=String(x==null?"":x); return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+  const csv=[cols.join(";")].concat(rows.map(r=>r.map(cell).join(";"))).join("\r\n");
+  const blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8;"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download=`Parc_actifs_${new Date().toISOString().slice(0,10)}.csv`; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1500);
 }
 
 function renderAssetForm(){
@@ -1388,51 +1474,146 @@ function renderAssetForm(){
     </div>`;
 }
 
-function movementRow(m){
-  let txt="";
-  if(m.type==="assignment") txt=`Affecté à <strong>${esc(userName(m.to_user_id))}</strong>`;
-  else if(m.type==="return") txt=`Retour en stock${m.from_user_id?(" (depuis "+esc(userName(m.from_user_id))+")"):""}`;
-  else if(m.type==="status_change") txt=`Statut : <strong>${esc(assetStatusLabel(m.from_status))}</strong> → <strong>${esc(assetStatusLabel(m.to_status))}</strong>`;
-  else if(m.type==="transfer") txt=`Transfert de site`;
-  else txt=esc(m.note||m.type);
-  return `<div class="thread-item"><div class="t-head"><span class="who">${esc(userName(m.actor_id))}</span><span>${fmtDate(m.created_at)}</span></div><div class="t-body">${txt}${m.note?` <span style="color:var(--ink-soft);">— ${esc(m.note)}</span>`:""}</div></div>`;
+// --- Garantie : compte à rebours explicite ---
+function assetWarranty(a){
+  if(!a.warranty_expiry) return null;
+  const d=daysTo(a.warranty_expiry), seuil=settingNum("warranty_warning_days");
+  return { d, expired:d<0, soon:d>=0 && d<=seuil,
+    txt: d<0 ? `expirée depuis ${Math.abs(d)} j` : (d===0?"expire aujourd'hui":`expire dans ${d} j`),
+    col: d<0 ? "var(--critical)" : (d<=seuil ? "#B45309" : "#15803D") };
+}
+// --- Frise du cycle de vie ---
+function movementTimeline(list){
+  if(!list.length) return `<div class="empty-state">Aucun mouvement enregistré.</div>`;
+  const meta={ creation:{c:"#15803D",l:"Enregistrement au parc"}, assignment:{c:"#1D4ED8",l:"Affectation"},
+    return:{c:"#54657A",l:"Retour en stock"}, status_change:{c:"#B45309",l:"Changement de statut"},
+    transfer:{c:"#6D28D9",l:"Transfert de site"} };
+  return `<div class="tl">${list.map(m=>{
+    const mt=meta[m.type]||{c:"#8A99AC",l:m.type};
+    let body="";
+    if(m.type==="assignment") body=`Affecté à <strong>${esc(userName(m.to_user_id))}</strong>`;
+    else if(m.type==="return") body=`Retour en stock${m.from_user_id?` (repris à ${esc(userName(m.from_user_id))})`:""}`;
+    else if(m.type==="status_change") body=`<strong>${esc(assetStatusLabel(m.from_status))}</strong> → <strong>${esc(assetStatusLabel(m.to_status))}</strong>`;
+    else if(m.type==="creation") body=`Entrée au parc${m.to_status?` — statut <strong>${esc(assetStatusLabel(m.to_status))}</strong>`:""}${m.to_user_id?`, affecté à <strong>${esc(userName(m.to_user_id))}</strong>`:""}`;
+    else if(m.type==="transfer") body=`Transfert${m.to_location_id?` vers <strong>${esc(locName(m.to_location_id))}</strong>`:""}`;
+    else body=esc(m.note||m.type);
+    return `<div class="tl-item">
+      <span class="tl-dot" style="background:${mt.c};"></span>
+      <div style="font-size:11px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.4px;">${esc(mt.l)}</div>
+      <div style="font-size:13.5px;line-height:1.5;margin-top:2px;">${body}</div>
+      <div style="font-size:11.5px;color:var(--ink-soft);margin-top:2px;">${esc(userName(m.actor_id))} · ${fmtDate(m.created_at)}${m.note?` — ${esc(m.note)}`:""}</div>
+    </div>`;
+  }).join("")}</div>`;
 }
 function renderAssetDetail(a){
   const editable=canEditAssets();
+  const w=assetWarranty(a);
   const statusOpts=assetStatuses().map(s=>`<option value="${esc(s)}" ${a.status===s?'selected':''}>${esc(assetStatusLabel(s))}</option>`).join("");
-  const warn = a.warranty_expiry ? (new Date(a.warranty_expiry) < new Date() ? `<span class="badge overdue">Garantie expirée</span>` : "") : "";
   const userOpts=`<option value="">— choisir un utilisateur —</option>`+state.profilesList.map(p=>`<option value="${p.id}">${esc(displayName(p))}</option>`).join("");
-  let assignCard="";
+  const bm=[a.brand?a.brand.name:"", a.model?a.model.name:""].filter(Boolean).join(" ");
+
+  // --- Identité ---
+  const line=(k,v)=>`<div style="display:flex;gap:10px;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px;">
+      <span style="flex:0 0 116px;color:var(--ink-soft);">${k}</span><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;">${v}</span></div>`;
+  const idCard=`<div class="card"><div class="section-label">Identité</div>
+    ${line("Tag",`<strong style="font-family:var(--mono);">${esc(a.asset_tag||"—")}</strong>`)}
+    ${line("N° de série",`<span style="font-family:var(--mono);">${esc(a.serial_no||"—")}</span>`)}
+    ${line("Marque / Modèle", esc(bm||"—"))}
+    ${line("Catégorie", esc(a.category?a.category.name:catName(a.category_id)))}
+    ${line("Propriété", esc(a.owner_type||"—"))}
+    ${line("Site", esc(a.location?a.location.name:"—"))}
+    ${line("Date d'achat", a.purchase_date?esc(a.purchase_date):"—")}
+    ${line("Coût", a.cost!=null?Number(a.cost).toLocaleString("fr-FR"):"—")}
+    ${line("Garantie", w?`${esc(a.warranty_expiry)} · <strong style="color:${w.col};">${esc(w.txt)}</strong>`:"—")}
+    ${line("Enregistré le", fmtDate(a.created_at))}
+    ${a.notes?`<div style="margin-top:10px;font-size:12.5px;color:var(--ink-soft);white-space:pre-wrap;">${esc(a.notes)}</div>`:""}
+  </div>`;
+
+  // --- Affectation & cycle de vie (transitions en un clic) ---
+  const st=a.status;
+  const qb=(to,lbl,cls="secondary")=>`<button class="btn tiny ${cls}" data-action="asset-quick" data-id="${a.id}" data-to="${esc(to)}">${lbl}</button>`;
+  let quick="";
   if(editable){
-    assignCard=`<div class="card"><div class="section-label">Affectation & statut</div>
+    const acts=[];
+    if(st==="Assigned"){ acts.push(`<button class="btn tiny secondary" data-action="asset-return" data-id="${a.id}">Retour en stock</button>`);
+      acts.push(qb("Under Maintenance","Envoyer en maintenance")); acts.push(qb("Lost","Marquer perdu","danger")); }
+    else if(st==="In Stock"){ acts.push(qb("Under Maintenance","Envoyer en maintenance")); acts.push(qb("Retired","Réformer","danger")); }
+    else if(["Under Maintenance","Repair Vendor"].includes(st)){ acts.push(qb("In Stock","Remettre en stock")); acts.push(qb("Repair Vendor","Envoyer chez le fournisseur")); acts.push(qb("Retired","Réformer","danger")); }
+    else if(["Damaged","Lost"].includes(st)){ acts.push(qb("In Stock","Retrouvé — remettre en stock")); acts.push(qb("Retired","Réformer","danger")); }
+    else if(["Retired","Disposed"].includes(st)){ acts.push(qb("In Stock","Réintégrer au parc")); }
+    quick=acts.length?`<div class="btn-row" style="flex-wrap:wrap;gap:6px;margin-bottom:12px;">${acts.join("")}</div>`:"";
+  }
+  const assignCard=editable?`<div class="card"><div class="section-label">Affectation & cycle de vie</div>
       ${a.assigned_user_id
-        ? `<div style="font-size:13.5px;margin-bottom:10px;">Actuellement affecté à <strong>${esc(a.assigned?a.assigned.full_name:"")}</strong></div><div class="btn-row" style="margin-bottom:14px;"><button class="btn tiny secondary" data-action="asset-return" data-id="${a.id}">Retour en stock</button></div>`
-        : `<div class="btn-row" style="margin-bottom:14px;"><select id="as-assign-user" style="max-width:240px;">${userOpts}</select><button class="btn tiny" data-action="asset-assign" data-id="${a.id}">Affecter</button></div>`}
-      <div class="section-label" style="margin-top:6px;">Changer le statut</div>
-      <div class="btn-row"><select id="as-status-upd" style="max-width:220px;">${statusOpts}</select><button class="btn tiny" data-action="asset-status" data-id="${a.id}">Appliquer</button></div>
+        ? `<div style="font-size:13.5px;margin-bottom:10px;">Affecté à <strong>${esc(a.assigned?a.assigned.full_name:"")}</strong></div>`
+        : `<div style="display:flex;align-items:center;gap:6px;margin-bottom:12px;flex-wrap:nowrap;">
+             <select id="as-assign-user" style="flex:1 1 auto;min-width:0;font-size:12.5px;padding:6px 5px;">${userOpts}</select>
+             <button class="btn tiny" data-action="asset-assign" data-id="${a.id}" style="flex:0 0 auto;">Affecter</button></div>`}
+      ${quick}
+      <div style="font-size:11.5px;color:var(--ink-soft);margin-bottom:5px;">Statut (manuel)</div>
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:nowrap;">
+        <select id="as-status-upd" style="flex:1 1 auto;min-width:0;font-size:12.5px;padding:6px 5px;">${statusOpts}</select>
+        <button class="btn tiny secondary" data-action="asset-status" data-id="${a.id}" style="flex:0 0 auto;">Appliquer</button></div>
+      <div class="hint" style="font-size:11.5px;margin-top:9px;">Chaque transition est enregistrée dans la frise. Un bien réformé ou remis en stock perd son affectation ; un bien perdu la conserve (traçabilité).</div>
+    </div>`
+    : `<div class="card"><div class="section-label">Affectation</div>
+        <div style="font-size:13.5px;">${a.assigned?`Affecté à <strong>${esc(a.assigned.full_name)}</strong>`:"Non affecté"}</div></div>`;
+
+  // --- Compléter / corriger les informations (les actifs anciens ou issus d'une réception
+  //     n'ont ni marque, ni modèle, ni n° de série : il faut pouvoir les renseigner). ---
+  let editCard="";
+  if(editable){
+    const o=state.assetEditOpen;
+    const catO=state.assetCats.slice().sort((x,y)=>(x.parent_id?1:0)-(y.parent_id?1:0)||x.name.localeCompare(y.name))
+      .map(c=>`<option value="${c.id}" ${a.category_id===c.id?'selected':''}>${esc(c.name)}</option>`).join("");
+    const ownO=ownerTypes().map(x=>`<option value="${esc(x)}" ${a.owner_type===x?'selected':''}>${esc(x)}</option>`).join("");
+    const locO=`<option value="">— site —</option>`+(state.locations||[]).map(l=>`<option value="${l.id}" ${a.location_id===l.id?'selected':''}>${esc(l.name)}</option>`).join("");
+    const brO=(state.brands||[]).map(b=>`<option value="${esc(b.name)}"></option>`).join("");
+    const moO=(state.assetModels||[]).map(m=>`<option value="${esc(m.name)}"></option>`).join("");
+    editCard=`<div class="card" style="margin-top:16px;">
+      <div data-action="asset-edit-toggle" style="cursor:pointer;display:flex;align-items:center;gap:8px;">
+        <span style="color:var(--ink-faint);font-size:11px;">${o?"▼":"▶"}</span>
+        <strong style="font-size:13px;">Compléter / corriger les informations</strong>
+        <span style="font-size:11.5px;color:var(--ink-soft);margin-left:auto;">tag, marque, modèle, n° de série, site…</span>
+      </div>
+      ${o?`<div class="pj-expand" style="margin-top:14px;">
+        <div class="field-row">
+          <div class="field"><label for="ae-tag">Tag / Code inventaire</label><input type="text" id="ae-tag" value="${esc(a.asset_tag||"")}"></div>
+          <div class="field"><label for="ae-name">Désignation</label><input type="text" id="ae-name" value="${esc(a.name||"")}"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label for="ae-cat">Catégorie</label><select id="ae-cat">${catO}</select></div>
+          <div class="field"><label for="ae-serial">N° de série</label><input type="text" id="ae-serial" value="${esc(a.serial_no||"")}"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label for="ae-brand">Marque</label><input type="text" id="ae-brand" list="dl-ebrands" autocomplete="off" value="${esc(a.brand?a.brand.name:"")}"><datalist id="dl-ebrands">${brO}</datalist></div>
+          <div class="field"><label for="ae-model">Modèle</label><input type="text" id="ae-model" list="dl-emodels" autocomplete="off" value="${esc(a.model?a.model.name:"")}"><datalist id="dl-emodels">${moO}</datalist></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label for="ae-loc">Site</label><select id="ae-loc">${locO}</select></div>
+          <div class="field"><label for="ae-owner">Type de propriété</label><select id="ae-owner">${ownO}</select></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label for="ae-purchase">Date d'achat</label><input type="date" id="ae-purchase" value="${esc(a.purchase_date||"")}"></div>
+          <div class="field"><label for="ae-warranty">Fin de garantie</label><input type="date" id="ae-warranty" value="${esc(a.warranty_expiry||"")}"></div>
+          <div class="field"><label for="ae-cost">Coût</label><input type="text" id="ae-cost" value="${a.cost!=null?esc(a.cost):""}"></div>
+        </div>
+        <div class="field"><label for="ae-notes">Notes</label><textarea id="ae-notes" rows="2">${esc(a.notes||"")}</textarea></div>
+        <div id="ae-err"></div>
+        <button class="btn" data-action="asset-save-info" data-id="${a.id}">Enregistrer les informations</button>
+        <div class="hint" style="font-size:11.5px;margin-top:8px;">Le statut et l'affectation se modifient plus haut, pour que chaque changement soit tracé dans la frise.</div>
+      </div>`:""}
     </div>`;
   }
-  const movements=(state.assetMovements||[]);
-  const historyCard=`<div class="card" style="margin-top:16px;"><div class="section-label">Historique des mouvements</div>${movements.length?`<div class="thread">${movements.map(movementRow).join("")}</div>`:`<div class="empty-state">Aucun mouvement enregistré.</div>`}</div>`;
+  const warnBadge = w ? `<span class="badge" style="background:${w.col}22;color:${w.col};">Garantie : ${esc(w.txt)}</span>` : "";
   return `<div class="detail-header"><div><span class="ticket-id">${esc(a.asset_tag||"")}</span><h2>${esc(a.name)}</h2>
-      <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;"><span class="badge svc">${esc(a.category?a.category.name:catName(a.category_id))}</span>${(a.brand||a.model)?`<span>${esc([a.brand?a.brand.name:"",a.model?a.model.name:""].filter(Boolean).join(" "))}</span>`:""}${a.serial_no?`<span>S/N ${esc(a.serial_no)}</span>`:""}${a.location?`<span>${esc(a.location.name)}</span>`:""}${a.assigned?`<span>Affecté à ${esc(a.assigned.full_name)}</span>`:""}</div></div>
-      <div style="display:flex;gap:8px;align-items:center;">${assetStatusBadge(a.status)}${warn}</div></div>
-    <div class="two-col">
-      <div class="card"><div class="section-label">Informations</div>
-        <div style="font-size:13.5px;line-height:1.9;">
-          <div><strong>Type :</strong> ${esc(a.owner_type||"—")}</div>
-          <div><strong>Achat :</strong> ${a.purchase_date?esc(a.purchase_date):"—"}</div>
-          <div><strong>Fin de garantie :</strong> ${a.warranty_expiry?esc(a.warranty_expiry):"—"}</div>
-          <div><strong>Coût :</strong> ${a.cost!=null?esc(a.cost):"—"}</div>
-          <div><strong>Créé le :</strong> ${fmtDate(a.created_at)}</div>
-        </div>
-        ${a.notes?`<div class="desc-box" style="margin-top:12px;">${esc(a.notes)}</div>`:""}
-      </div>
-      ${assignCard}
-    </div>
-    ${historyCard}`;
+      <div class="meta" style="font-size:12.5px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;"><span class="badge svc">${esc(a.category?a.category.name:catName(a.category_id))}</span>${bm?`<span>${esc(bm)}</span>`:""}${a.serial_no?`<span>S/N ${esc(a.serial_no)}</span>`:""}${a.location?`<span>${esc(a.location.name)}</span>`:""}${a.assigned?`<span>Affecté à ${esc(a.assigned.full_name)}</span>`:""}</div></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">${assetStatusBadge(a.status)}${warnBadge}</div></div>
+    <div class="two-col">${idCard}${assignCard}</div>
+    ${editCard}
+    <div class="card" style="margin-top:16px;"><div class="section-label">Cycle de vie — ${(state.assetMovements||[]).length} mouvement(s)</div>
+      ${movementTimeline(state.assetMovements||[])}</div>`;
 }
-
 // =========================== STOCK (Phase 2 — tranche 3) ===========================
 const STOCK_MOVE_TYPES=[["receipt","Réception (+)"],["transfer","Transfert"],["issue","Sortie (−)"],["return","Retour (+)"],["adjustment","Ajustement (=)"]];
 function moveTypeLabel(t){ const x=STOCK_MOVE_TYPES.find(m=>m[0]===t); return x?x[1]:t; }
@@ -3244,11 +3425,11 @@ function bindEvents(){
   wire("f-service",e=>{state.filter.service=e.target.value; render();});
   wire("f-priority",e=>{state.filter.priority=e.target.value; render();});
   wire("dash-period",e=>{state.dashPeriod=e.target.value; render();});
-  wire("af-cat",e=>{state.assetFilter.cat=e.target.value; render();});
-  wire("af-status",e=>{state.assetFilter.status=e.target.value; render();});
-  wire("af-loc",e=>{state.assetFilter.loc=e.target.value; render();});
+  wire("af-cat",e=>{state.assetFilter.cat=e.target.value; state.assetPage=1; render();});
+  wire("af-status",e=>{state.assetFilter.status=e.target.value; state.assetPage=1; render();});
+  wire("af-loc",e=>{state.assetFilter.loc=e.target.value; state.assetPage=1; render();});
   const af=document.getElementById("af-search");
-  if(af){ af.addEventListener("input",e=>{state.assetFilter.search=e.target.value; render();}); af.focus(); af.setSelectionRange(af.value.length,af.value.length); }
+  if(af){ af.addEventListener("input",e=>{state.assetFilter.search=e.target.value; state.assetPage=1; render();}); af.focus(); af.setSelectionRange(af.value.length,af.value.length); }
   const sts=document.getElementById("st-search");
   if(sts){ sts.addEventListener("input",e=>{state.stockSearch=e.target.value; render();}); sts.focus(); sts.setSelectionRange(sts.value.length,sts.value.length); }
   wire("pj-status",e=>{state.projectFilter.status=e.target.value; render();});
@@ -3283,6 +3464,8 @@ function bindEvents(){
 }
 
 async function onAction(e){
+  // Une action imbriquée dans une zone cliquable ne doit déclencher QUE la sienne.
+  try{ e.stopPropagation(); }catch(_){}
   const el=e.currentTarget, action=el.dataset.action;
   const busy=t=>{ el.disabled=true; if(el.tagName==="BUTTON"){ el.dataset._t=el.textContent; el.textContent=t; } };
   const unbusy=()=>{ el.disabled=false; if(el.dataset._t) el.textContent=el.dataset._t; };
@@ -3948,23 +4131,31 @@ async function onAction(e){
     }
     return;
   }
+  if(action==="asset-sort"){
+    const c=el.dataset.col;
+    if(state.assetSort.col===c) state.assetSort.dir = state.assetSort.dir==="asc"?"desc":"asc";
+    else state.assetSort={col:c, dir:"asc"};
+    state.assetPage=1; render(); return;
+  }
+  if(action==="asset-page"){ state.assetPage=Math.max(1,parseInt(el.dataset.p,10)||1); render(); return; }
+  if(action==="asset-export"){ exportAssetsCSV(); return; }
   if(action==="asset-subview"){ state.assetsSubview=el.dataset.view; render(); return; }
-  if(action==="asset-filter-clear"){ state.assetFilter={cat:"all", status:"all", search:"", loc:"all", preset:"all"}; render(); return; }
+  if(action==="asset-filter-clear"){ state.assetFilter={cat:"all", status:"all", search:"", loc:"all", preset:"all"}; state.assetPage=1; render(); return; }
   if(action==="asset-kpi"){
     const f=el.dataset.f;
     state.assetFilter={cat:"all", status:"all", search:"", loc:"all", preset:"all"};
     if(f==="stock") state.assetFilter.status="In Stock";
     else if(f==="assigned") state.assetFilter.status="Assigned";
     else if(f!=="all") state.assetFilter.preset=f;
-    state.assetsSubview="list"; render(); return;
+    state.assetPage=1; state.assetsSubview="list"; render(); return;
   }
-  if(action==="asset-bar-cat"){ state.assetFilter.cat = el.dataset.val==="_" ? "all" : el.dataset.val; state.assetsSubview="list"; render(); return; }
-  if(action==="asset-bar-loc"){ state.assetFilter.loc = el.dataset.val==="_" ? "all" : el.dataset.val; state.assetsSubview="list"; render(); return; }
-  if(action==="asset-bar-status"){ state.assetFilter.status = el.dataset.val==="_" ? "all" : el.dataset.val; state.assetsSubview="list"; render(); return; }
+  if(action==="asset-bar-cat"){ state.assetFilter.cat = el.dataset.val==="_" ? "all" : el.dataset.val; state.assetPage=1; state.assetsSubview="list"; render(); return; }
+  if(action==="asset-bar-loc"){ state.assetFilter.loc = el.dataset.val==="_" ? "all" : el.dataset.val; state.assetPage=1; state.assetsSubview="list"; render(); return; }
+  if(action==="asset-bar-status"){ state.assetFilter.status = el.dataset.val==="_" ? "all" : el.dataset.val; state.assetPage=1; state.assetsSubview="list"; render(); return; }
   if(action==="asset-new"){ state.assetNew=true; state.selectedAssetId=null; render(); return; }
   if(action==="asset-cancel"){ state.assetNew=false; render(); return; }
   if(action==="open-asset"){ state.selectedAssetId=el.dataset.id; state.assetMovements=[]; render(); await loadAssetMovements(el.dataset.id); return; }
-  if(action==="asset-back"){ state.selectedAssetId=null; render(); return; }
+  if(action==="asset-back"){ state.selectedAssetId=null; state.assetEditOpen=false; render(); return; }
   if(action==="submit-asset"){
     const tag=document.getElementById("as-tag").value.trim();
     const name=document.getElementById("as-name").value.trim();
@@ -3995,6 +4186,50 @@ async function onAction(e){
       try{ await sb.from("asset_movements").insert({ asset_id:data.id, type:"creation", to_status:finalStatus, to_location_id:location_id, to_user_id:assigned_user_id, actor_id:uid(), note:"Enregistrement au parc" }); }catch(_){}
     }catch(err){ errBox.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; unbusy(); return; }
     await reloadAssets(); state.assetNew=false; render(); return;
+  }
+  if(action==="asset-edit-toggle"){ state.assetEditOpen=!state.assetEditOpen; render(); return; }
+  if(action==="asset-save-info"){
+    const id=el.dataset.id, errb=document.getElementById("ae-err");
+    const g=x=>document.getElementById(x);
+    const tag=((g("ae-tag")||{value:""}).value||"").trim();
+    const name=((g("ae-name")||{value:""}).value||"").trim();
+    if(!tag||!name){ if(errb) errb.innerHTML=`<div class="error-msg">Tag et désignation obligatoires.</div>`; return; }
+    const rawCost=((g("ae-cost")||{value:""}).value||"").trim().replace(/\s/g,"").replace(",",".");
+    const cost = rawCost===""?null:Number(rawCost);
+    if(cost!==null && (isNaN(cost)||cost<0)){ if(errb) errb.innerHTML=`<div class="error-msg">Coût invalide.</div>`; return; }
+    busy("Enregistrement…");
+    try{
+      const category_id=(g("ae-cat")||{value:""}).value||null;
+      const brand_id=await resolveBrandId(((g("ae-brand")||{value:""}).value||"").trim());
+      const model_id=await resolveModelId(((g("ae-model")||{value:""}).value||"").trim(), brand_id, category_id);
+      const { error } = await sb.from("assets").update({
+        asset_tag:tag, name, category_id, brand_id, model_id,
+        serial_no:((g("ae-serial")||{value:""}).value||"").trim()||null,
+        location_id:(g("ae-loc")||{value:""}).value||null,
+        owner_type:(g("ae-owner")||{value:""}).value||null,
+        purchase_date:(g("ae-purchase")||{value:""}).value||null,
+        warranty_expiry:(g("ae-warranty")||{value:""}).value||null,
+        cost, notes:((g("ae-notes")||{value:""}).value||"").trim()||null }).eq("id",id);
+      if(error) throw error;
+      state.assetEditOpen=false; await reloadAssets(); render();
+    }catch(err){ unbusy(); const b=document.getElementById("ae-err"); if(b) b.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
+  if(action==="asset-quick"){
+    const id=el.dataset.id, to=el.dataset.to;
+    const cur=state.assets.find(x=>x.id===id); if(!cur || cur.status===to) return;
+    // Règles : réformé/remis en stock → l'affectation tombe ; perdu → on garde qui l'avait.
+    const clears=["In Stock","Retired","Disposed"].includes(to);
+    if(["Retired","Disposed"].includes(to) && !confirm("Réformer cet actif ? Il sortira des vues actives mais restera au registre avec son historique.")) return;
+    busy("…");
+    try{
+      const upd={ status:to }; if(clears) upd.assigned_user_id=null;
+      await sb.from("assets").update(upd).eq("id",id);
+      await sb.from("asset_movements").insert({ asset_id:id, type:"status_change", from_status:cur.status, to_status:to,
+        from_user_id:cur.assigned_user_id||null, to_user_id:clears?null:(cur.assigned_user_id||null), actor_id:uid() });
+      await reloadAssets(); await loadAssetMovements(id); render();
+    }catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
   }
   if(action==="asset-status"){
     const id=el.dataset.id, to_status=document.getElementById("as-status-upd").value, from_status=state.assets.find(x=>x.id===id).status;
