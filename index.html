@@ -256,7 +256,6 @@ let state = {
   pos:[], vendors:[], vendorsLoaded:false, procSubview:"requests", selectedPoId:null, poItems:[],
   poReceipts:[], receivedByItem:{}, poReceiving:false,
   projects:[], projectsLoaded:false, projectFilter:{status:"all", search:""}, selectedProjectId:null, projectNew:false, projectTasks:[],
-  meetings:[], meetingsLoaded:false, meetingFilter:{status:"all", scope:"mine", search:""}, selectedMeetingId:null, meetingNew:false, meetingParts:[], meetingLinks:[], meetingActions:[], meetView:"list", meetMonth:null, myLateActions:0, myMeetActions:[],
   projectsSubview:"projects", taskAddOpen:false, projectMilestones:[], projectActivity:[], msAddOpen:false, projectLoadError:"", projectRisks:[], projectExpenses:[], riskAddOpen:false, expAddOpen:false, taskComments:{}, taskFilter:{q:"", status:"all", asg:"all"}, projectPhases:[], taskChecklists:{}, expandedPhases:{}, expandedTaskId:null, ganttZoom:"auto", ganttPxFit:null, ganttScroll:null, projectMembers:[], taskActivities:[], myProjTasks:[], myOpenTaskId:null, activities:[], activitiesLoaded:false, activityFilter:{department:"all", status:"all", search:""}, selectedActivityId:null, activityNew:false, activityComments:[],
   myTickets:[], myActivities:[], myTasksLoaded:false, myOpenTicketId:null, myOpenActivityId:null, unseenMentions:0,
   execLoaded:false, execData:null,
@@ -300,9 +299,6 @@ function canCreatePr(){ return can("procurement","create"); }
 function canViewProjects(){ return can("projects","view"); }
 function canManageProjects(){ return canWrite("projects"); }
 function canViewActivities(){ return can("activities","view"); }
-function canViewMeetings(){ return can("meetings","view"); }
-function canCreateMeetings(){ return isAdmin() || can("meetings","create"); }
-function meetingsStaff(){ return isAdmin() || can("meetings","edit"); }
 function canManageActivities(){ return canWrite("activities"); }
 function canViewExec(){ return can("exec","view"); }
 function canViewReports(){ return can("reports","view"); }
@@ -341,7 +337,6 @@ const SCREENS = [
   {key:"procurement", label:"Achats"},
   {key:"projects",    label:"Projets"},
   {key:"activities",  label:"Suivi par service"},
-  {key:"meetings",    label:"Réunions"},
   {key:"maintenance", label:"Maintenance (administration)"},
 ];
 const PERM_ACTIONS = [["view","Voir"],["create","Créer"],["edit","Modifier"],["delete","Supprimer"]];
@@ -499,12 +494,6 @@ async function afterLogin(){
   const params = isMonitor() ? null : new URLSearchParams(location.search);
   const tkParam = params ? params.get("ticket") : null;
   const acParam = params ? params.get("activity") : null;
-  const mtParam = params ? params.get("meeting") : null;
-  if(mtParam && !state.loadError){
-    state.view="meetings"; state.selectedMeetingId=mtParam; state.meetingsLoaded=false;
-    try{ history.replaceState(null,"",location.pathname); }catch(_){}
-    render(); return;
-  }
   if((acParam || tkParam) && !state.loadError){
     state.view="mytasks"; state.myTasksLoaded=false;
     if(acParam) state.myOpenActivityId=acParam;
@@ -595,7 +584,6 @@ function navGroups(){
         {v:"stock", l:"Stock", show:()=>canViewStock()},
         {v:"procurement", l:"Achats", show:()=>canViewProcurement()} ] },
     { key:"projects", label:"Projets", leaves:[ {v:"projects", l:"Projets", show:()=>canViewProjects()||canViewActivities()} ] },
-    { key:"meetings", label:"Réunions", leaves:[ {v:"meetings", l:"Réunions", show:()=>canViewMeetings()} ] },
     { key:"maint", label:"Maintenance", leaves:[ {v:"maintenance", l:"Maintenance", show:()=>isAdmin()} ] },
   ].filter(g=> g.leaves.some(lf=>lf.show()));
 }
@@ -629,7 +617,6 @@ function renderMain(){
   if(state.view==="stock") return canViewStock()?sub+renderStockArea():"";
   if(state.view==="procurement") return canViewProcurement()?sub+renderProcurementArea():"";
   if(state.view==="projects") return (canViewProjects()||canViewActivities())?renderProjectsArea():"";
-  if(state.view==="meetings") return canViewMeetings()?renderMeetingsArea():"";
   if(state.view==="maintenance") return isAdmin()?renderMaintenance():"";
   return "";
 }
@@ -2167,16 +2154,14 @@ async function loadMyTasks(){
   const aIds=[...new Set(mentions.filter(m=>m.subject_type==='activity').map(m=>m.subject_id))];
   const tSel="*, requester:requester_id(full_name), assignee:assignee_id(full_name)";
   const aSel="*, department:department_id(name), assignee:assignee_id(full_name)";
-  const [tA, tT, aA, aT, pT, mA] = await Promise.all([
+  const [tA, tT, aA, aT, pT] = await Promise.all([
     sb.from("tickets").select(tSel).eq("assignee_id",me),
     tIds.length?sb.from("tickets").select(tSel).in("id",tIds):Promise.resolve({data:[]}),
     sb.from("service_activities").select(aSel).eq("assignee_id",me),
     aIds.length?sb.from("service_activities").select(aSel).in("id",aIds):Promise.resolve({data:[]}),
-    sb.from("project_tasks").select("*, project:project_id(name,project_no)").eq("assignee_id",me).neq("status","Done").order("end_date",{ascending:true,nullsFirst:false}),
-    sb.from("meeting_actions").select("*, meeting:meeting_id(title,meeting_date)").eq("assignee_id",me).neq("status","Terminé").order("due_date",{ascending:true,nullsFirst:false})
+    sb.from("project_tasks").select("*, project:project_id(name,project_no)").eq("assignee_id",me).neq("status","Done").order("end_date",{ascending:true,nullsFirst:false})
   ]);
   state.myProjTasks=pT.data||[];
-  state.myMeetActions=mA.data||[];
   const tMap={}; [...(tA.data||[]),...(tT.data||[])].forEach(t=>tMap[t.id]=t); state.myTickets=Object.values(tMap);
   const aMap={}; [...(aA.data||[]),...(aT.data||[])].forEach(a=>aMap[a.id]=a); state.myActivities=Object.values(aMap);
   // Lien profond ticket : charger directement s'il n'est ni assigné ni tagué pour cette personne.
@@ -2239,11 +2224,7 @@ function renderMyTasks(){
     <div class="section-label" style="margin-top:20px;">Tâches de projet (${state.myProjTasks.length})</div><div class="ticket-list">${(state.myProjTasks||[]).map(t=>{
       const late=t.end_date&&new Date(t.end_date)<new Date();
       return `<div class="ticket-row" data-action="mt-open-task" data-id="${t.id}"><div class="col-main"><div class="subject">${esc(t.name)}</div><div class="meta"><span>${t.project?esc(t.project.name):"—"}</span>${t.end_date?`<span ${late?'style="color:var(--critical);font-weight:600;"':''}>échéance ${esc(t.end_date)}</span>`:""}</div></div><div class="col-status">${taskStatusBadge(t.status)}</div></div>`;
-    }).join("")||`<div class="empty-state">Aucune tâche de projet.</div>`}</div>
-    <div class="section-label" style="margin-top:20px;">Actions de réunion (${(state.myMeetActions||[]).length})</div><div class="ticket-list">${(state.myMeetActions||[]).map(a=>{
-      const late=a.due_date && a.due_date<new Date().toISOString().slice(0,10);
-      return `<div class="ticket-row" style="cursor:default;"><div class="col-main"><div class="subject">${esc(a.title)}</div><div class="meta"><span>${a.meeting?esc(a.meeting.title):"—"}</span>${a.due_date?`<span ${late?'style="color:var(--critical);font-weight:600;"':''}>échéance ${esc(a.due_date)}</span>`:""}</div></div><div class="col-status"><select data-action="mt-meet-action-status" data-id="${a.id}" style="font-size:12px;padding:4px 6px;">${ACTION_STATUSES.map(x=>`<option value="${x}" ${a.status===x?'selected':''}>${x}</option>`).join("")}</select></div></div>`;
-    }).join("")||`<div class="empty-state">Aucune action de réunion.</div>`}</div>`;
+    }).join("")||`<div class="empty-state">Aucune tâche de projet.</div>`}</div>`;
 }
 function renderProjectsArea(){
   const hasP=canViewProjects(), hasA=canViewActivities();
@@ -2892,37 +2873,6 @@ function renderGantt(tasks){
   </div>`;
 }
 
-// =========================== RÉUNIONS ===========================
-const MEETING_STATUSES=["Planifiée","Confirmée","En cours","Terminée","Annulée","Reportée"];
-const MEETING_TYPES=["Réunion","Atelier","Session technique","Point projet","Comité","Autre"];
-const ACTION_STATUSES=["À faire","En cours","Terminé"];
-function meetStatusColor(st){ return st==="Terminée"?"#2e9e5b":st==="Annulée"?"#d9534f":st==="En cours"?"#2e75b6":st==="Reportée"?"#b07d2b":"#8A99AC"; }
-function meetBadge(st){ const c=meetStatusColor(st); return `<span class="badge" style="background:${c}22;color:${c};">${esc(st||"—")}</span>`; }
-async function loadMeetings(){
-  try{
-    const { data } = await sb.from("meetings")
-      .select("*, organizer:organizer_id(full_name), meeting_participants(user_id)")
-      .order("meeting_date",{ascending:true}).order("start_time",{ascending:true});
-    state.meetings=data||[];
-  }catch(_){ state.meetings=[]; }
-  try{
-    const todayISO=new Date().toISOString().slice(0,10);
-    const { count } = await sb.from("meeting_actions").select("id",{count:'exact',head:true})
-      .eq("assignee_id",uid()).neq("status","Terminé").lt("due_date",todayISO);
-    state.myLateActions=count||0;
-  }catch(_){ state.myLateActions=0; }
-  state.meetingsLoaded=true; render();
-}
-async function loadMeetingDetail(id){
-  const [p,l,a]=await Promise.all([
-    sb.from("meeting_participants").select("*, user:user_id(full_name,email)").eq("meeting_id",id),
-    sb.from("meeting_links").select("*").eq("meeting_id",id),
-    sb.from("meeting_actions").select("*, assignee:assignee_id(full_name)").eq("meeting_id",id).order("created_at")
-  ]);
-  state.meetingParts=p.data||[]; state.meetingLinks=l.data||[]; state.meetingActions=a.data||[];
-  render();
-}
-function canEditMeeting(m){ return meetingsStaff() || m.organizer_id===uid(); }
 // --- Progression en cascade (refonte Projets) ---
 function taskPct(t){ const items=state.taskChecklists[t.id]||[]; if(!items.length) return Math.max(0,Math.min(100,Number(t.progress_pct)||0)); return Math.round(items.reduce((s,i)=>s+(Number(i.progress_pct)||0),0)/items.length); }
 function phasePct(tasks){ if(!tasks.length) return 0; return Math.round(tasks.reduce((s,t)=>s+taskPct(t),0)/tasks.length); }
@@ -2933,198 +2883,6 @@ async function syncTaskPct(taskId){
   const status = pct>=100 ? "Done" : (pct>0 && t.status==="Todo" ? "In Progress" : t.status);
   try{ await sb.from("project_tasks").update({ progress_pct:pct, status }).eq("id",taskId); t.progress_pct=pct; t.status=status; }catch(_){}
 }
-async function notifyMeeting(recipients, event, m, extra){
-  const me=uid();
-  for(const r of (recipients||[]).filter(x=>x && x!==me)){
-    try{ await sb.functions.invoke("notify-user", { body:Object.assign({
-      kind:"meeting", event, recipient_id:r, meeting_id:m.id, meeting_title:m.title,
-      meeting_date:m.meeting_date, meeting_time:m.start_time?String(m.start_time).slice(0,5):null,
-      location:m.location||null, tagger_name:myName() }, extra||{}) }); }catch(_){}
-  }
-}
-function renderMeetingsArea(){
-  if(!state.meetingsLoaded){ loadMeetings(); return `<div class="empty-state">Chargement des réunions…</div>`; }
-  if(state.selectedMeetingId){ const m=state.meetings.find(x=>x.id===state.selectedMeetingId);
-    if(m){ if(state._meetDetailFor!==m.id){ state._meetDetailFor=m.id; loadMeetingDetail(m.id); }
-      return `<button class="back-link" data-action="meeting-back">&larr; Réunions</button>`+renderMeetingDetail(m); }
-    state.selectedMeetingId=null; }
-  if(state.meetingNew && canCreateMeetings()) return `<button class="back-link" data-action="meeting-back">&larr; Réunions</button>`+renderMeetingForm();
-  if(state.meetView==="month") return renderMeetingsMonth();
-  const f=state.meetingFilter;
-  let list=state.meetings.slice();
-  if(f.status!=="all") list=list.filter(m=>m.status===f.status);
-  if((f.search||"").trim()){ const q=f.search.toLowerCase(); list=list.filter(m=>(m.title||"").toLowerCase().includes(q)); }
-  const todayISO=new Date().toISOString().slice(0,10);
-  const upcoming=list.filter(m=>m.meeting_date>=todayISO && !["Terminée","Annulée"].includes(m.status));
-  const past=list.filter(m=>!(m.meeting_date>=todayISO && !["Terminée","Annulée"].includes(m.status))).reverse();
-  const stOpts=`<option value="all">Tous statuts</option>`+MEETING_STATUSES.map(x=>`<option value="${x}" ${f.status===x?'selected':''}>${x}</option>`).join("");
-  const newBtn=canCreateMeetings()?`<button class="btn secondary" data-action="meeting-new">+ Nouvelle réunion</button>`:"";
-  const row=m=>{
-    const nb=(m.meeting_participants||[]).length;
-    return `<div class="ticket-row" data-action="open-meeting" data-id="${m.id}">
-      <div class="col-main"><div class="subject">${esc(m.title)}</div>
-        <div class="meta"><span class="badge svc">${esc(m.meeting_type||"Réunion")}</span>
-          <span>${esc(m.meeting_date)}${m.start_time?` · ${String(m.start_time).slice(0,5)}${m.end_time?`–${String(m.end_time).slice(0,5)}`:""}`:""}</span>
-          <span>${m.organizer?esc(m.organizer.full_name):"—"}</span><span>${nb} participant(s)</span>
-          ${m.location?`<span>${esc(m.location.length>34?m.location.slice(0,34)+"…":m.location)}</span>`:""}</div></div>
-      <div class="col-status">${m.priority?`<span class="badge priority-${m.priority}">${esc(m.priority)}</span>`:""}${meetBadge(m.status)}</div></div>`;
-  };
-  const wk=new Date(); wk.setDate(wk.getDate()+7); const wkISO=wk.toISOString().slice(0,10);
-  const kToday=state.meetings.filter(m=>m.meeting_date===todayISO && !["Terminée","Annulée"].includes(m.status)).length;
-  const k7=state.meetings.filter(m=>m.meeting_date>todayISO && m.meeting_date<=wkISO && !["Terminée","Annulée"].includes(m.status)).length;
-  const kDone=state.meetings.filter(m=>m.status==="Terminée" && (m.meeting_date||"").slice(0,7)===todayISO.slice(0,7)).length;
-  return `<h1 class="page-title">Réunions</h1><p class="page-sub">Réunions, ateliers et sessions liés à l'activité. ${list.length} réunion(s) visibles.</p>
-    <div class="subnav"><button data-action="meet-view" data-v="list" class="active">Liste</button><button data-action="meet-view" data-v="month">Mois</button></div>
-    <div class="stat-row" style="margin-bottom:14px;">
-      <div class="stat ${kToday?'accent':''}"><div class="n">${kToday}</div><div class="l">Aujourd'hui</div></div>
-      <div class="stat"><div class="n">${k7}</div><div class="l">7 prochains jours</div></div>
-      <div class="stat ${state.myLateActions?'alert':''}"><div class="n">${state.myLateActions}</div><div class="l">Mes actions en retard</div></div>
-      <div class="stat"><div class="n">${kDone}</div><div class="l">Terminées (mois)</div></div>
-    </div>
-    <div class="filters">
-      <div class="field"><label>Statut</label><select id="mt-f-status">${stOpts}</select></div>
-      <div class="field search"><label>Recherche</label><input type="text" id="mt-f-search" placeholder="Titre…" value="${esc(f.search||'')}"></div>
-      ${newBtn}
-    </div>
-    <div class="section-label">À venir (${upcoming.length})</div>
-    <div class="ticket-list">${upcoming.map(row).join("")||`<div class="empty-state">Aucune réunion à venir.</div>`}</div>
-    <div class="section-label" style="margin-top:20px;">Passées / clôturées (${past.length})</div>
-    <div class="ticket-list">${past.slice(0,20).map(row).join("")||`<div class="empty-state">Rien pour l'instant.</div>`}</div>`;
-}
-function meetingLinkOptions(kind){
-  if(kind==="project") return (state.projects||[]).map(p=>[p.id,(p.project_no?p.project_no+" — ":"")+p.name]);
-  if(kind==="ticket") return (state.tickets||[]).slice(0,200).map(t=>[t.id,(t.ticket_no||"")+" — "+t.subject]);
-  if(kind==="activity") return (state.activities||[]).map(a=>[a.id,a.title]);
-  if(kind==="department") return (state.departments||[]).map(d=>[d.id,d.name]);
-  return [];
-}
-function renderMeetingForm(){
-  const typeOpts=MEETING_TYPES.map(t=>`<option value="${t}">${t}</option>`).join("");
-  const prOpts=`<option value="">—</option>`+getPriorities().map(p=>`<option value="${esc(p)}">${esc(p)}</option>`).join("");
-  const parts=(state.profilesList||[]).map(u=>`<label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:3px 0;"><input type="checkbox" class="mt-part" value="${u.id}"> ${esc(displayName(u))}</label>`).join("");
-  return `<h1 class="page-title">Nouvelle réunion</h1>
-    <div class="card">
-      <div class="field"><label>Titre *</label><input type="text" id="mt-title" placeholder="Ex. Point hebdo migration ERP"></div>
-      <div class="field-row">
-        <div class="field"><label>Type</label><select id="mt-type">${typeOpts}</select></div>
-        <div class="field"><label>Priorité</label><select id="mt-priority">${prOpts}</select></div>
-        <div class="field"><label>Statut</label><select id="mt-status">${MEETING_STATUSES.map(x=>`<option value="${x}">${x}</option>`).join("")}</select></div>
-      </div>
-      <div class="field-row">
-        <div class="field"><label>Date *</label><input type="date" id="mt-date"></div>
-        <div class="field"><label>Début</label><input type="time" id="mt-start"></div>
-        <div class="field"><label>Fin</label><input type="time" id="mt-end"></div>
-      </div>
-      <div class="field"><label>Lieu ou lien visioconférence</label><input type="text" id="mt-loc" placeholder="Salle réunion P3 / https://teams…"></div>
-      <div class="field"><label>Description</label><textarea id="mt-desc" rows="2"></textarea></div>
-      <div class="field"><label>Lier à un élément (optionnel)</label>
-        <div class="field-row">
-          <div class="field"><select id="mt-link-type"><option value="">— aucun lien —</option><option value="project">Projet</option><option value="ticket">Ticket</option><option value="activity">Activité de service</option><option value="department">Service</option></select></div>
-          <div class="field"><select id="mt-link-id"><option value="">—</option></select></div>
-        </div>
-        <div class="hint" style="font-size:12px;">Le libellé de l'élément est figé sur la réunion (traçabilité).</div>
-      </div>
-      <div class="field"><label>Participants</label>
-        <div style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px 12px;">${parts||"—"}</div>
-      </div>
-      <div id="mt-form-err"></div>
-      <button class="btn" data-action="save-meeting">Créer la réunion</button>
-    </div>`;
-}
-function renderMeetingDetail(m){
-  const canEdit=canEditMeeting(m);
-  const parts=(state.meetingParts||[]).map(p=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px;">
-      <span>${esc(p.user?p.user.full_name||p.user.email:"—")}</span>
-      ${canEdit?`<button class="btn tiny danger" data-action="meeting-part-del" data-id="${p.id}">Retirer</button>`:""}</div>`).join("")||`<div class="hint" style="font-size:12px;">Aucun participant.</div>`;
-  const addPart=canEdit?`<div class="btn-row" style="margin-top:8px;align-items:center;">
-      <select id="mt-add-part" style="font-size:12.5px;padding:6px 8px;"><option value="">— ajouter —</option>${(state.profilesList||[]).filter(u=>!(state.meetingParts||[]).some(x=>x.user_id===u.id)).map(u=>`<option value="${u.id}">${esc(displayName(u))}</option>`).join("")}</select>
-      <button class="btn tiny" data-action="meeting-part-add" data-id="${m.id}">Ajouter</button></div>`:"";
-  const links=(state.meetingLinks||[]).map(l=>{
-    const lbl={project:"Projet",task:"Tâche",ticket:"Ticket",activity:"Activité",department:"Service"}[l.subject_type]||l.subject_type;
-    return `<div style="padding:5px 0;font-size:13px;"><span class="badge svc">${lbl}</span> ${esc(l.subject_label||l.subject_id)}</div>`;
-  }).join("")||`<div class="hint" style="font-size:12px;">Aucun élément lié.</div>`;
-  const stCtrl=canEdit?`<div class="btn-row" style="align-items:center;margin-top:10px;">
-      <span style="font-size:12px;color:var(--ink-soft);">Statut</span>
-      <select id="mt-st" style="font-size:12px;padding:5px 8px;">${MEETING_STATUSES.map(x=>`<option value="${x}" ${m.status===x?'selected':''}>${x}</option>`).join("")}</select>
-      <button class="btn tiny" data-action="meeting-status" data-id="${m.id}">Appliquer</button></div>`:"";
-  const minutes=canEdit
-    ? `<div class="field"><label>Ordre du jour</label><textarea id="mt-agenda" rows="3">${esc(m.agenda||"")}</textarea></div>
-       <div class="field"><label>Notes / points discutés</label><textarea id="mt-notes" rows="3">${esc(m.notes||"")}</textarea></div>
-       <div class="field"><label>Décisions prises</label><textarea id="mt-decisions" rows="3">${esc(m.decisions||"")}</textarea></div>
-       <div id="mt-min-err"></div><button class="btn secondary" data-action="meeting-save-minutes" data-id="${m.id}">Enregistrer le compte rendu</button>`
-    : `${m.agenda?`<div class="field"><label>Ordre du jour</label><div style="white-space:pre-wrap;font-size:13.5px;">${esc(m.agenda)}</div></div>`:""}
-       ${m.notes?`<div class="field"><label>Notes</label><div style="white-space:pre-wrap;font-size:13.5px;">${esc(m.notes)}</div></div>`:""}
-       ${m.decisions?`<div class="field"><label>Décisions</label><div style="white-space:pre-wrap;font-size:13.5px;">${esc(m.decisions)}</div></div>`:""}`;
-  const actRows=(state.meetingActions||[]).map(a=>{
-    const mineA=a.assignee_id===uid();
-    const ctl=(canEdit||mineA)?`<select data-action="meeting-action-status" data-id="${a.id}" style="font-size:12px;padding:4px 6px;">${ACTION_STATUSES.map(x=>`<option value="${x}" ${a.status===x?'selected':''}>${x}</option>`).join("")}</select>`:actBadgeLike(a.status);
-    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);">
-      <div style="min-width:0;"><div style="font-size:13.5px;font-weight:600;">${esc(a.title)}</div>
-        <div class="meta" style="font-size:12px;color:var(--ink-soft);">${a.assignee?esc(a.assignee.full_name):"non affectée"}${a.due_date?` · échéance ${esc(a.due_date)}`:""}${a.priority?` · ${esc(a.priority)}`:""}</div></div>
-      <div>${ctl}</div></div>`;
-  }).join("")||`<div class="hint" style="font-size:12px;">Aucune action.</div>`;
-  const asgOpts=`<option value="">— responsable —</option>`+(state.profilesList||[]).map(u=>`<option value="${u.id}">${esc(displayName(u))}</option>`).join("");
-  const addAction=canEdit?`<div class="field-row" style="margin-top:10px;">
-      <div class="field"><label>Nouvelle action</label><input type="text" id="mt-act-title" placeholder="Ex. Transmettre l'export au service…"></div>
-      <div class="field"><label>Responsable</label><select id="mt-act-asg">${asgOpts}</select></div>
-      <div class="field"><label>Échéance</label><input type="date" id="mt-act-due"></div>
-    </div><div id="mt-act-err"></div><button class="btn tiny" data-action="meeting-action-add" data-id="${m.id}">Ajouter l'action</button>`:"";
-  return `<h1 class="page-title">${esc(m.title)}</h1>
-    <div class="card">
-      <div class="meta" style="display:flex;gap:12px;flex-wrap:wrap;color:var(--ink-soft);font-size:13px;">
-        <span class="badge svc">${esc(m.meeting_type||"Réunion")}</span>${meetBadge(m.status)}
-        ${m.priority?`<span class="badge priority-${m.priority}">${esc(m.priority)}</span>`:""}
-        <span>${esc(m.meeting_date)}${m.start_time?` · ${String(m.start_time).slice(0,5)}${m.end_time?`–${String(m.end_time).slice(0,5)}`:""}`:""}</span>
-        <span>Organisateur : ${m.organizer?esc(m.organizer.full_name):"—"}</span>
-        ${m.location?`<span>${esc(m.location)}</span>`:""}
-      </div>
-      ${m.description?`<p style="margin-top:10px;white-space:pre-wrap;">${esc(m.description)}</p>`:""}
-      ${stCtrl}
-      ${canEdit?`<div class="btn-row" style="align-items:flex-end;margin-top:12px;flex-wrap:wrap;gap:8px;">
-        <div class="field" style="margin:0;"><label>Date</label><input type="date" id="mt-re-date" value="${esc(m.meeting_date||'')}"></div>
-        <div class="field" style="margin:0;"><label>Début</label><input type="time" id="mt-re-start" value="${m.start_time?String(m.start_time).slice(0,5):''}"></div>
-        <div class="field" style="margin:0;"><label>Fin</label><input type="time" id="mt-re-end" value="${m.end_time?String(m.end_time).slice(0,5):''}"></div>
-        <div class="field" style="margin:0;flex:1;min-width:180px;"><label>Lieu / lien</label><input type="text" id="mt-re-loc" value="${esc(m.location||'')}"></div>
-        <button class="btn tiny secondary" data-action="meeting-save-schedule" data-id="${m.id}">Replanifier (notifie les participants)</button>
-      </div><div id="mt-re-err"></div>`:""}
-    </div>
-    <div class="two-col">
-      <div class="card"><div class="section-label">Participants (${(state.meetingParts||[]).length})</div>${parts}${addPart}</div>
-      <div class="card"><div class="section-label">Éléments liés</div>${links}</div>
-    </div>
-    <div class="card"><div class="section-label">Compte rendu</div>${minutes}</div>
-    <div class="card"><div class="section-label">Actions de réunion (${(state.meetingActions||[]).length})</div>${actRows}${addAction}</div>`;
-}
-function renderMeetingsMonth(){
-  const now=new Date();
-  const ym = state.meetMonth || `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
-  const [Y,M]=ym.split("-").map(Number);
-  const first=new Date(Y,M-1,1), start=new Date(first); start.setDate(1-((first.getDay()+6)%7)); // lundi
-  const MONTHS=["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
-  const todayISO=new Date().toISOString().slice(0,10);
-  let cells="";
-  for(let i=0;i<42;i++){
-    const d=new Date(start); d.setDate(start.getDate()+i);
-    const iso=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-    const inMonth=d.getMonth()===M-1;
-    const meets=state.meetings.filter(m=>m.meeting_date===iso);
-    const chips=meets.slice(0,3).map(m=>`<div data-action="open-meeting" data-id="${m.id}" style="cursor:pointer;font-size:10.5px;background:${meetStatusColor(m.status)}22;color:${meetStatusColor(m.status)};border-radius:5px;padding:2px 5px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(m.title)}">${m.start_time?String(m.start_time).slice(0,5)+" ":""}${esc(m.title)}</div>`).join("")
-      +(meets.length>3?`<div style="font-size:10px;color:var(--ink-soft);margin-top:2px;">+${meets.length-3} autre(s)</div>`:"");
-    cells+=`<div style="min-height:86px;border:1px solid var(--border);border-radius:8px;padding:6px;background:${inMonth?'#fff':'var(--surface-2)'};${iso===todayISO?'box-shadow:inset 0 0 0 2px #e07a5f66;':''}">
-      <div style="font-size:11px;font-weight:600;color:${inMonth?'var(--ink)':'var(--ink-faint)'};">${d.getDate()}</div>${chips}</div>`;
-  }
-  const dows=["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"].map(d=>`<div style="font-size:11px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.4px;text-align:center;">${d}</div>`).join("");
-  return `<h1 class="page-title">Réunions</h1><p class="page-sub">Vue mensuelle.</p>
-    <div class="subnav"><button data-action="meet-view" data-v="list">Liste</button><button data-action="meet-view" data-v="month" class="active">Mois</button></div>
-    <div class="btn-row" style="align-items:center;margin-bottom:12px;">
-      <button class="btn tiny secondary" data-action="meet-month-nav" data-d="-1">◀</button>
-      <strong style="min-width:170px;text-align:center;">${MONTHS[M-1]} ${Y}</strong>
-      <button class="btn tiny secondary" data-action="meet-month-nav" data-d="1">▶</button>
-      <button class="btn tiny secondary" data-action="meet-month-nav" data-d="0">Ce mois</button>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px;">${dows}${cells}</div>`;
-}
-function actBadgeLike(st){ const c=st==="Terminé"?"#2e9e5b":st==="En cours"?"#2e75b6":"#8A99AC"; return `<span class="badge" style="background:${c}22;color:${c};">${esc(st)}</span>`; }
 
 // =========================== MAINTENANCE (admin) ===========================
 function renderMaintenance(){
@@ -3419,7 +3177,7 @@ function exportMedlogixCSV(){
 
 // =========================== EVENTS ===========================
 function bindEvents(){
-  document.querySelectorAll("[data-action]").forEach(el=>{ el.addEventListener(["change-role","change-group","meeting-action-status","mt-meet-action-status","cl-pct","risk-status"].includes(el.dataset.action)?"change":"click", onAction); });
+  document.querySelectorAll("[data-action]").forEach(el=>{ el.addEventListener(["change-role","change-group","cl-pct","risk-status"].includes(el.dataset.action)?"change":"click", onAction); });
   const wire=(id,fn)=>{const e=document.getElementById(id); if(e) e.addEventListener("change",fn);};
   wire("f-status",e=>{state.filter.status=e.target.value; render();});
   wire("f-service",e=>{state.filter.service=e.target.value; render();});
@@ -3439,15 +3197,6 @@ function bindEvents(){
   wire("act-f-dep",e=>{state.activityFilter.department=e.target.value; render();});
   wire("act-f-status",e=>{state.activityFilter.status=e.target.value; render();});
   wire("act-f-search",e=>{state.activityFilter.search=e.target.value; render();});
-  wire("mt-f-status",e=>{state.meetingFilter.status=e.target.value; render();});
-  wire("mt-f-search",e=>{state.meetingFilter.search=e.target.value; render();});
-  wire("mt-link-type",async e=>{
-    const kind=e.target.value; const sel=document.getElementById("mt-link-id"); if(!sel) return;
-    if(kind==="project" && !state.projectsLoaded){ try{ await loadProjects(); }catch(_){} }
-    if(kind==="activity" && !state.activitiesLoaded){ try{ await loadActivities(); }catch(_){} }
-    const opts=meetingLinkOptions(kind);
-    sel.innerHTML=`<option value="">—</option>`+opts.map(([v,l])=>`<option value="${v}">${esc(l)}</option>`).join("");
-  });
   const rsrc=document.getElementById("report-src");
   if(rsrc) rsrc.addEventListener("change",e=>{ state.reportSource=e.target.value; state.reportFilters={}; state.reportRows=null; state.reportError=null; render(); });
   document.querySelectorAll("[data-rf]").forEach(el=>{
@@ -3654,12 +3403,6 @@ async function onAction(e){
   if(action==="mt-open-activity"){ state.myOpenActivityId=el.dataset.id; state.activityComments=[]; render(); await loadActivityComments(el.dataset.id); return; }
   if(action==="mt-back"){ state.myOpenTicketId=null; state.myOpenActivityId=null; state.myOpenTaskId=null; render(); return; }
   if(action==="mt-open-task"){ state.myOpenTaskId=el.dataset.id; render(); return; }
-  if(action==="mt-meet-action-status"){
-    busy("…");
-    try{ await sb.from("meeting_actions").update({status:el.value}).eq("id",el.dataset.id); state.myTasksLoaded=false; await loadMyTasks(); }
-    catch(err){ alert(err.message||String(err)); unbusy(); }
-    return;
-  }
   if(action==="mt-task-save"){
     const id=el.dataset.id;
     const status=document.getElementById("mt-tk-st").value;
@@ -3747,123 +3490,6 @@ async function onAction(e){
     else if(el.dataset.dir==="next") sc.scrollLeft+=Math.round(sc.clientWidth*0.8);
     else { const tl=sc.querySelector('div[style*="e07a5f"]'); if(tl){ const x=parseInt(tl.style.left,10)||0; sc.scrollLeft=Math.max(0,x-Math.round(sc.clientWidth/3)); } else sc.scrollLeft=0; }
     state.ganttScroll=sc.scrollLeft;
-    return;
-  }
-  if(action==="meeting-new"){ state.meetingNew=true; state.selectedMeetingId=null; render(); return; }
-  if(action==="meeting-back"){ state.meetingNew=false; state.selectedMeetingId=null; state._meetDetailFor=null; render(); return; }
-  if(action==="open-meeting"){ state.selectedMeetingId=el.dataset.id; state.meetingParts=[]; state.meetingLinks=[]; state.meetingActions=[]; render(); await loadMeetingDetail(el.dataset.id); return; }
-  if(action==="save-meeting"){
-    const title=(document.getElementById("mt-title").value||"").trim();
-    const meeting_date=document.getElementById("mt-date").value;
-    const errb=document.getElementById("mt-form-err");
-    if(!title||!meeting_date){ if(errb) errb.innerHTML=`<div class="error-msg">Le titre et la date sont obligatoires.</div>`; return; }
-    const rec={ title, meeting_date,
-      meeting_type:document.getElementById("mt-type").value||null,
-      priority:document.getElementById("mt-priority").value||null,
-      status:document.getElementById("mt-status").value||"Planifiée",
-      start_time:document.getElementById("mt-start").value||null,
-      end_time:document.getElementById("mt-end").value||null,
-      location:(document.getElementById("mt-loc").value||"").trim()||null,
-      description:(document.getElementById("mt-desc").value||"").trim()||null,
-      organizer_id:uid(), created_by:uid() };
-    busy("Création de la réunion…");
-    try{
-      const { data, error } = await sb.from("meetings").insert(rec).select().single(); if(error) throw error;
-      const partIds=[...document.querySelectorAll(".mt-part:checked")].map(c=>c.value);
-      if(!partIds.includes(uid())) partIds.push(uid());
-      if(partIds.length) await sb.from("meeting_participants").insert(partIds.map(u=>({meeting_id:data.id,user_id:u})));
-      const lt=document.getElementById("mt-link-type").value, li=document.getElementById("mt-link-id").value;
-      if(lt && li){
-        const optEl=document.querySelector(`#mt-link-id option[value="${li}"]`);
-        await sb.from("meeting_links").insert({ meeting_id:data.id, subject_type:lt, subject_id:li, subject_label:optEl?optEl.textContent:null });
-      }
-      state.meetingNew=false; state.selectedMeetingId=data.id; state._meetDetailFor=data.id; state.meetingsLoaded=false;
-      notifyMeeting(partIds, "invite", data);
-      await loadMeetings(); await loadMeetingDetail(data.id);
-    }catch(err){ unbusy(); const b=document.getElementById("mt-form-err"); if(b) b.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
-    return;
-  }
-  if(action==="meeting-status"){
-    const st=document.getElementById("mt-st").value;
-    busy("…");
-    try{ await sb.from("meetings").update({status:st}).eq("id",el.dataset.id);
-      if(st==="Annulée"){ const m=(state.meetings||[]).find(x=>x.id===el.dataset.id); if(m) notifyMeeting((state.meetingParts||[]).map(p=>p.user_id), "cancel", m); }
-      state.meetingsLoaded=false; await loadMeetings(); await loadMeetingDetail(el.dataset.id); }
-    catch(err){ alert(err.message||String(err)); unbusy(); }
-    return;
-  }
-  if(action==="meeting-save-minutes"){
-    const id=el.dataset.id; const errb=document.getElementById("mt-min-err");
-    busy("Enregistrement…");
-    try{ const { error } = await sb.from("meetings").update({
-        agenda:(document.getElementById("mt-agenda").value||"").trim()||null,
-        notes:(document.getElementById("mt-notes").value||"").trim()||null,
-        decisions:(document.getElementById("mt-decisions").value||"").trim()||null }).eq("id",id);
-      if(error) throw error; state.meetingsLoaded=false; await loadMeetings(); unbusy();
-      if(errb) errb.innerHTML=`<div class="ok-msg">Compte rendu enregistré.</div>`;
-    }catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
-    return;
-  }
-  if(action==="meeting-part-add"){
-    const sel=document.getElementById("mt-add-part"); const u=sel?sel.value:"";
-    if(!u) return;
-    busy("…");
-    try{ await sb.from("meeting_participants").insert({meeting_id:el.dataset.id, user_id:u}); await loadMeetingDetail(el.dataset.id); unbusy(); }
-    catch(err){ alert(err.message||String(err)); unbusy(); }
-    return;
-  }
-  if(action==="meeting-part-del"){
-    busy("…");
-    try{ const part=(state.meetingParts||[]).find(x=>x.id===el.dataset.id); await sb.from("meeting_participants").delete().eq("id",el.dataset.id); if(part) await loadMeetingDetail(part.meeting_id); else render(); unbusy(); }
-    catch(err){ alert(err.message||String(err)); unbusy(); }
-    return;
-  }
-  if(action==="meeting-action-add"){
-    const id=el.dataset.id; const errb=document.getElementById("mt-act-err");
-    const title=(document.getElementById("mt-act-title").value||"").trim();
-    if(!title){ if(errb) errb.innerHTML=`<div class="error-msg">L'intitulé de l'action est obligatoire.</div>`; return; }
-    busy("…");
-    try{ const { error } = await sb.from("meeting_actions").insert({ meeting_id:id, title,
-        assignee_id:document.getElementById("mt-act-asg").value||null,
-        due_date:document.getElementById("mt-act-due").value||null,
-        created_by:uid() });
-      if(error) throw error;
-      const asg=document.getElementById("mt-act-asg").value;
-      if(asg){ const m=(state.meetings||[]).find(x=>x.id===id); if(m) notifyMeeting([asg], "action", m, { message:title }); }
-      await loadMeetingDetail(id); unbusy();
-    }catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
-    return;
-  }
-  if(action==="meeting-action-status"){
-    busy("…");
-    try{ const act=(state.meetingActions||[]).find(x=>x.id===el.dataset.id); await sb.from("meeting_actions").update({status:el.value}).eq("id",el.dataset.id); if(act) await loadMeetingDetail(act.meeting_id); unbusy(); }
-    catch(err){ alert(err.message||String(err)); unbusy(); }
-    return;
-  }
-  if(action==="meet-view"){ state.meetView=el.dataset.v; render(); return; }
-  if(action==="meet-month-nav"){
-    const now=new Date();
-    if(el.dataset.d==="0"){ state.meetMonth=null; render(); return; }
-    const cur=state.meetMonth||`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
-    let [Y,M]=cur.split("-").map(Number); M+=Number(el.dataset.d);
-    if(M<1){M=12;Y--;} if(M>12){M=1;Y++;}
-    state.meetMonth=`${Y}-${String(M).padStart(2,"0")}`; render(); return;
-  }
-  if(action==="meeting-save-schedule"){
-    const id=el.dataset.id; const errb=document.getElementById("mt-re-err");
-    const rec={ meeting_date:document.getElementById("mt-re-date").value||null,
-      start_time:document.getElementById("mt-re-start").value||null,
-      end_time:document.getElementById("mt-re-end").value||null,
-      location:(document.getElementById("mt-re-loc").value||"").trim()||null,
-      status:"Reportée" };
-    if(!rec.meeting_date){ if(errb) errb.innerHTML=`<div class="error-msg">La date est obligatoire.</div>`; return; }
-    busy("Replanification…");
-    try{ const { error } = await sb.from("meetings").update(rec).eq("id",id); if(error) throw error;
-      const m=Object.assign({}, (state.meetings||[]).find(x=>x.id===id)||{}, rec, {id});
-      notifyMeeting((state.meetingParts||[]).map(p=>p.user_id), "update", m);
-      state.meetingsLoaded=false; await loadMeetings(); await loadMeetingDetail(id);
-      const b=document.getElementById("mt-re-err"); if(b) b.innerHTML=`<div class="ok-msg">Réunion replanifiée, participants notifiés.</div>`;
-    }catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
     return;
   }
   if(action==="cl-focus"){
