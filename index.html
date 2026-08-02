@@ -249,7 +249,7 @@ let state = {
   maintSubview:"annonces", lookupType:"service",
   adminUsers:[], usersLoaded:false,
   assets:[], assetCats:[], assetsLoaded:false, assetsSubview:"dashboard", assetSort:{col:"asset_tag", dir:"asc"}, assetPage:1, assetFilter:{cat:"all", status:"all", search:"", loc:"all", preset:"all"},
-  mscTickets:[], mscCapacity:[], mscTrucks:[], mscLoaded:false, mscSubview:"dashboard", mscFilter:{type:"all", status:"all", delay:"all", search:""}, mscPage:1, mscSelectedId:null, mscNew:false,
+  mscTickets:[], mscCapacity:[], mscTrucks:[], mscBld:[], mscLoaded:false, mscDomain:"intermodal", mscSubview:"dashboard", bldSubview:"dashboard", bldSelectedId:null, bldNew:false, bldFilter:{dest:"all", state:"all", search:""}, bldPage:1, mscFilter:{type:"all", status:"all", delay:"all", search:""}, mscPage:1, mscSelectedId:null, mscNew:false,
   selectedAssetId:null, assetNew:false, assetEditOpen:false, assetMovements:[], profilesList:[],
   stockItems:[], stockLoaded:false, stockSubview:"inventory", stockSearch:"", stockMoves:[], locations:[], locationsLoaded:false,
   selectedStockId:null, stockNew:false,
@@ -645,13 +645,14 @@ function mscDue(t){ return t.ticket_at&&t.validity_hours ? new Date(new Date(t.t
 
 async function loadMsc(){
   try{
-    const [tk, cap, tr] = await Promise.all([
+    const [tk, cap, tr, bld] = await Promise.all([
       sb.from("msc_tickets").select("*").order("ticket_at",{ascending:false}),
       sb.from("msc_daily_capacity").select("*").order("day",{ascending:false}),
-      sb.from("msc_trucks").select("*").order("plate")
+      sb.from("msc_trucks").select("*").order("plate"),
+      sb.from("msc_bld").select("*").order("docs_received_at",{ascending:false})
     ]);
-    state.mscTickets=tk.data||[]; state.mscCapacity=cap.data||[]; state.mscTrucks=tr.data||[]; state.mscLoaded=true; render();
-  }catch(e){ state.mscTickets=[]; state.mscCapacity=[]; state.mscTrucks=[]; state.mscLoaded=true; render(); }
+    state.mscTickets=tk.data||[]; state.mscCapacity=cap.data||[]; state.mscTrucks=tr.data||[]; state.mscBld=bld.data||[]; state.mscLoaded=true; render();
+  }catch(e){ state.mscTickets=[]; state.mscCapacity=[]; state.mscTrucks=[]; state.mscBld=[]; state.mscLoaded=true; render(); }
 }
 async function reloadMsc(){
   const { data } = await sb.from("msc_tickets").select("*").order("ticket_at",{ascending:false});
@@ -685,18 +686,35 @@ function mscInPeriod(dateVal){
 function renderMscArea(){
   if(!canViewMsc()) return `<div class="empty-state">Accès non autorisé.</div>`;
   if(!state.mscLoaded){ loadMsc(); return `<div class="empty-state">Chargement des opérations MSC…</div>`; }
+  const dom=state.mscDomain||"intermodal";
+  const domNav=`<div class="subnav" style="margin-bottom:6px;">
+    <button data-action="msc-domain" data-dom="intermodal" class="${dom==="intermodal"?'active':''}">Intermodal</button>
+    <button data-action="msc-domain" data-dom="bld" class="${dom==="bld"?'active':''}">BLD Hinterland</button>
+  </div>`;
+  if(dom==="bld") return domNav+renderMscBldArea();
+  // --- Domaine Intermodal ---
   const sub=`<div class="subnav">
-    <button data-action="msc-subview" data-view="dashboard" class="${state.mscSubview!=="list"&&state.mscSubview!=="capacity"?'active':''}">Tableau de bord</button>
+    <button data-action="msc-subview" data-view="dashboard" class="${state.mscSubview!=="list"&&state.mscSubview!=="capacity"&&state.mscSubview!=="trucks"?'active':''}">Tableau de bord</button>
     <button data-action="msc-subview" data-view="list" class="${state.mscSubview==="list"?'active':''}">Tickets (${state.mscTickets.length})</button>
     <button data-action="msc-subview" data-view="capacity" class="${state.mscSubview==="capacity"?'active':''}">Disponibilité du jour</button>
     <button data-action="msc-subview" data-view="trucks" class="${state.mscSubview==="trucks"?'active':''}">Flotte (${state.mscTrucks.length})</button>
   </div>`;
-  if(state.mscSelectedId){ const t=state.mscTickets.find(x=>x.id===state.mscSelectedId); if(t) return `<button class="back-link" data-action="msc-back">&larr; Retour</button>`+renderMscForm(t); state.mscSelectedId=null; }
-  if(state.mscNew && canEditMsc()) return `<button class="back-link" data-action="msc-back">&larr; Retour</button>`+renderMscForm(null);
-  if(state.mscSubview==="list") return sub+renderMscList();
-  if(state.mscSubview==="trucks") return sub+renderMscTrucks();
-  if(state.mscSubview==="capacity") return sub+renderMscCapacity();
-  return sub+renderMscDashboard();
+  if(state.mscSelectedId){ const t=state.mscTickets.find(x=>x.id===state.mscSelectedId); if(t) return domNav+`<button class="back-link" data-action="msc-back">&larr; Retour</button>`+renderMscForm(t); state.mscSelectedId=null; }
+  if(state.mscNew && canEditMsc()) return domNav+`<button class="back-link" data-action="msc-back">&larr; Retour</button>`+renderMscForm(null);
+  if(state.mscSubview==="list") return domNav+sub+renderMscList();
+  if(state.mscSubview==="trucks") return domNav+sub+renderMscTrucks();
+  if(state.mscSubview==="capacity") return domNav+sub+renderMscCapacity();
+  return domNav+sub+renderMscDashboard();
+}
+function renderMscBldArea(){
+  const sub=`<div class="subnav">
+    <button data-action="bld-subview" data-view="dashboard" class="${state.bldSubview!=="list"?'active':''}">Tableau de bord</button>
+    <button data-action="bld-subview" data-view="list" class="${state.bldSubview==="list"?'active':''}">Dossiers (${(state.mscBld||[]).length})</button>
+  </div>`;
+  if(state.bldSelectedId){ const b=(state.mscBld||[]).find(x=>x.id===state.bldSelectedId); if(b) return `<button class="back-link" data-action="bld-back">&larr; Retour</button>`+renderBldForm(b); state.bldSelectedId=null; }
+  if(state.bldNew && canEditMsc()) return `<button class="back-link" data-action="bld-back">&larr; Retour</button>`+renderBldForm(null);
+  if(state.bldSubview==="list") return sub+renderBldList();
+  return sub+renderBldDashboard();
 }
 
 function mscFiltered(){
@@ -975,6 +993,171 @@ function renderMscTrucks(){
     ${form}
     ${(state.mscTrucks||[]).length?`<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;background:var(--surface);"><table class="dense">
       <thead><tr><th>Immatriculation</th><th>Type</th><th>État</th><th>Note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:`<div class="empty-state">Aucun camion. Ajoutez votre flotte pour commencer.</div>`}`;
+}
+// =========================== MODULE MSC — BLD Hinterland ===========================
+function bldReloadNeeded(){}
+async function reloadBld(){ const { data } = await sb.from("msc_bld").select("*").order("docs_received_at",{ascending:false}); state.mscBld=data||[]; }
+function bldIsRCA(dest){ return (dest||"").trim().toUpperCase()==="RCA"; }
+// Délais calculés
+function bldFormalites(b){
+  if(!b.terminal_exit_at) return null;
+  const start=[b.eta, b.docs_received_at].filter(Boolean).map(d=>new Date(d).getTime());
+  if(!start.length) return null;
+  const from=Math.max(...start);                    // max(ETA, réception docs)
+  const days=Math.round((new Date(b.terminal_exit_at).getTime()-from)/86400000);
+  return days;
+}
+function bldLivraison(b){
+  if(!b.loaded_at || !b.delivered_at) return null;
+  return Math.round((new Date(b.delivered_at).getTime()-new Date(b.loaded_at).getTime())/86400000);
+}
+// État du dossier : livré, ou en cours (étape atteinte la plus avancée)
+function bldState(b){
+  if(b.delivered_at) return { key:"delivered", label:"Livré", col:"#15803D" };
+  if(b.loaded_at) return { key:"loading", label:"Chargé, en route", col:"#1D4ED8" };
+  if(b.terminal_exit_at) return { key:"exited", label:"Sorti terminal", col:"#6D28D9" };
+  if(bldIsRCA(b.destination) && b.declaration_validated_at) return { key:"declared", label:"Déclaration validée", col:"#B45309" };
+  if(b.docs_received_at) return { key:"docs", label:"Documents reçus", col:"#B45309" };
+  return { key:"open", label:"Ouvert", col:"var(--ink-soft)" };
+}
+function bldStateBadge(b){ const st=bldState(b); return `<span class="badge" style="background:${st.col}22;color:${st.col};">${st.label}</span>`; }
+function bldAgeDays(b){ if(!b.docs_received_at) return null; return Math.round((Date.now()-new Date(b.docs_received_at).getTime())/86400000); }
+
+function bldFiltered(){
+  const f=state.bldFilter||{};
+  let list=(state.mscBld||[]).slice();
+  if(f.dest&&f.dest!=="all") list=list.filter(b=>(b.destination||"")===f.dest);
+  if(f.state&&f.state!=="all") list=list.filter(b=>bldState(b).key===f.state);
+  if((f.search||"").trim()){ const q=f.search.toLowerCase(); list=list.filter(b=>(b.bl_no||"").toLowerCase().includes(q)||(b.destination||"").toLowerCase().includes(q)); }
+  return list;
+}
+function bldInPeriod(b){ if(!b.docs_received_at) return state.dashPeriod==="all"; if(state.dashPeriod==="all") return true; const r=periodRange(); const ms=new Date(b.docs_received_at).getTime(); return ms>=r.from && ms<=r.to; }
+
+function renderBldDashboard(){
+  const all=(state.mscBld||[]).filter(bldInPeriod);
+  const delivered=all.filter(b=>b.delivered_at);
+  const inProgress=all.filter(b=>!b.delivered_at);
+  const avg=(arr)=>arr.length?Math.round(arr.reduce((a,b)=>a+b,0)/arr.length):null;
+  const avgForm=avg(all.map(bldFormalites).filter(v=>v!=null));
+  const avgLiv=avg(all.map(bldLivraison).filter(v=>v!=null));
+  const periods=[["all","Toutes périodes"],["today","Aujourd'hui"],["yesterday","Hier"],["last7","7 derniers jours"],["this_month","Ce mois"],["prev_month","Mois précédent"],["this_year","Cette année"],["custom","Personnalisée"]];
+  const periodSelect=`<select id="dash-period">${periods.map(([v,l])=>`<option value="${v}" ${state.dashPeriod===v?'selected':''}>${l}</option>`).join("")}</select>`;
+  const customRange=state.dashPeriod==="custom"?`<div class="field" style="margin-bottom:0;"><label>Du</label><input type="date" id="cf" value="${esc(state.customFrom)}"></div><div class="field" style="margin-bottom:0;"><label>Au</label><input type="date" id="ct" value="${esc(state.customTo)}"></div>`:"";
+  const kpis=`<div class="stat-row">
+    <div class="stat"><div class="n">${all.length}</div><div class="l">Dossiers</div></div>
+    <div class="stat ${inProgress.length?'accent':''}"><div class="n">${inProgress.length}</div><div class="l">En cours</div></div>
+    <div class="stat"><div class="n">${delivered.length}</div><div class="l">Livrés</div></div>
+    <div class="stat"><div class="n">${avgForm!=null?avgForm+" j":"—"}</div><div class="l">Délai moyen formalités</div></div>
+    <div class="stat"><div class="n">${avgLiv!=null?avgLiv+" j":"—"}</div><div class="l">Délai moyen livraison</div></div>
+  </div>`;
+  const byDest=(()=>{const m={};all.forEach(b=>{const k=(b.destination||"—");m[k]=(m[k]||0)+1;});return Object.keys(m).map(k=>({label:k,count:m[k]})).sort((a,b)=>b.count-a.count);})();
+  // Dossiers en attente les plus anciens (non livrés, docs reçus), triés par ancienneté
+  const waiting=inProgress.filter(b=>b.docs_received_at).map(b=>({b,age:bldAgeDays(b)})).sort((a,b)=>b.age-a.age).slice(0,8);
+  const waitCard=`<div class="card"><div class="section-label">En attente — les plus anciens (${waiting.length})</div>
+    ${waiting.length?waiting.map(x=>`<div data-action="bld-open" data-id="${x.b.id}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(x.b.bl_no)} · ${esc(x.b.destination||"—")} · ${bldState(x.b).label}</span>
+        <span style="flex:0 0 auto;font-size:11.5px;color:${x.age>21?'var(--critical)':x.age>10?'#B45309':'var(--ink-soft)'};font-weight:600;">${x.age} j</span></div>`).join("")
+      :`<div style="font-size:12.5px;color:#15803D;">Aucun dossier en attente. ✅</div>`}</div>`;
+  // Top délais formalités
+  const topForm=all.map(b=>({b,d:bldFormalites(b)})).filter(x=>x.d!=null).sort((a,b)=>b.d-a.d).slice(0,6);
+  const topCard=`<div class="card"><div class="section-label">Plus longs délais formalités</div>
+    ${topForm.length?topForm.map(x=>`<div data-action="bld-open" data-id="${x.b.id}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(x.b.bl_no)} · ${esc(x.b.destination||"—")}</span>
+        <span style="flex:0 0 auto;font-family:var(--mono);color:${x.d>15?'var(--critical)':'var(--ink-soft)'};">${x.d} j</span></div>`).join("")
+      :`<div style="font-size:12.5px;color:var(--ink-soft);">Pas encore de délai calculable.</div>`}</div>`;
+  return `<h1 class="page-title">BLD Hinterland</h1><p class="page-sub">Suivi documentaire des conteneurs vers l'arrière-pays.</p>
+    <div class="filters"><div class="field" style="margin-bottom:0;"><label>Période (réception docs)</label>${periodSelect}</div>${customRange}
+      ${canEditMsc()?`<button class="btn secondary" data-action="bld-new" style="align-self:flex-end;">+ Nouveau dossier</button>`:""}</div>
+    ${kpis}
+    <div class="two-col">
+      <div class="card"><div class="section-label">Par destination</div>${byDest.length?barList(byDest):`<div class="empty-state" style="padding:22px;">Aucun dossier.</div>`}</div>
+      ${topCard}
+    </div>
+    ${waitCard}`;
+}
+function renderBldList(){
+  const f=state.bldFilter||{};
+  const list=bldFiltered();
+  const sorted=list.slice().sort((a,b)=>(b.docs_received_at||"").localeCompare(a.docs_received_at||""));
+  const PAGE=50, total=sorted.length, pages=Math.max(1,Math.ceil(total/PAGE));
+  const page=Math.min(Math.max(1,state.bldPage||1),pages);
+  const slice=sorted.slice((page-1)*PAGE,page*PAGE);
+  const dests=[...new Set((state.mscBld||[]).map(b=>b.destination).filter(Boolean))];
+  const destOpts=`<option value="all">Toutes destinations</option>`+dests.map(d=>`<option value="${esc(d)}" ${f.dest===d?'selected':''}>${esc(d)}</option>`).join("");
+  const stOpts=`<option value="all">Tous états</option>`+[["open","Ouvert"],["docs","Documents reçus"],["declared","Déclaration validée"],["exited","Sorti terminal"],["loading","Chargé"],["delivered","Livré"]].map(([v,l])=>`<option value="${v}" ${f.state===v?'selected':''}>${l}</option>`).join("");
+  const rows=slice.map(b=>{
+    const fo=bldFormalites(b), li=bldLivraison(b);
+    return `<tr data-action="bld-open" data-id="${b.id}">
+      <td style="font-family:var(--mono);font-size:12px;font-weight:600;">${esc(b.bl_no)}</td>
+      <td>${esc(b.destination||"—")}</td>
+      <td style="font-size:12px;">${b.docs_received_at?esc(b.docs_received_at):"—"}</td>
+      <td style="font-size:12px;">${b.eta?esc(b.eta):"—"}</td>
+      <td style="font-family:var(--mono);text-align:center;">${fo!=null?fo+" j":"—"}</td>
+      <td style="font-family:var(--mono);text-align:center;">${li!=null?li+" j":"—"}</td>
+      <td>${bldStateBadge(b)}</td>
+    </tr>`;
+  }).join("");
+  const pager=pages>1?`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;flex-wrap:wrap;">
+      <span style="font-size:12px;color:var(--ink-soft);">${(page-1)*PAGE+1}–${Math.min(page*PAGE,total)} sur ${total}</span>
+      <div class="btn-row"><button class="btn tiny secondary" data-action="bld-page" data-p="${page-1}" ${page<=1?"disabled":""}>◀</button>
+        <span style="font-size:12.5px;">page ${page} / ${pages}</span>
+        <button class="btn tiny secondary" data-action="bld-page" data-p="${page+1}" ${page>=pages?"disabled":""}>▶</button></div></div>`:"";
+  return `<h1 class="page-title">Dossiers BLD</h1><p class="page-sub">${total} dossier(s)${total!==(state.mscBld||[]).length?` sur ${(state.mscBld||[]).length}`:""}.</p>
+    <div class="filters">
+      <div class="field"><label>Destination</label><select id="bld-f-dest">${destOpts}</select></div>
+      <div class="field"><label>État</label><select id="bld-f-state">${stOpts}</select></div>
+      <div class="field search"><label>Recherche</label><input type="text" id="bld-f-search" placeholder="N° BL, destination…" value="${esc(f.search||'')}"></div>
+      <button class="btn tiny secondary" data-action="bld-export" style="align-self:flex-end;">Exporter CSV</button>
+      ${canEditMsc()?`<button class="btn secondary" data-action="bld-new">+ Nouveau dossier</button>`:""}
+    </div>
+    ${total?`<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;background:var(--surface);"><table class="dense">
+      <thead><tr><th>N° BL</th><th>Destination</th><th>Réception docs</th><th>ETA</th><th>Formalités</th><th>Livraison</th><th>État</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>${pager}`:`<div class="empty-state">Aucun dossier ne correspond.</div>`}`;
+}
+function renderBldForm(b){
+  const isNew=!b; b=b||{};
+  const rca=bldIsRCA(b.destination);
+  const fo=bldFormalites(b), li=bldLivraison(b);
+  const calc = !isNew ? `<div class="hint" style="font-size:12px;margin-top:-4px;">Délai formalités : <strong>${fo!=null?fo+" j":"—"}</strong> · Délai livraison : <strong>${li!=null?li+" j":"—"}</strong> · État : <strong style="color:${bldState(b).col};">${bldState(b).label}</strong></div>` : "";
+  return `<h1 class="page-title">${isNew?"Nouveau dossier BLD":"Dossier "+(esc(b.bl_no)||"")}</h1>
+    <div class="card">
+      <div class="field-row">
+        <div class="field"><label for="bld-no">N° BL <span style="color:var(--critical);">*</span></label><input type="text" id="bld-no" value="${esc(b.bl_no||"")}" placeholder="ex : MEDUW6997466"></div>
+        <div class="field"><label for="bld-dest">Destination <span style="color:var(--critical);">*</span></label><input type="text" id="bld-dest" value="${esc(b.destination||"")}" placeholder="RCA, Tchad…" list="dl-bld-dest"><datalist id="dl-bld-dest"><option value="RCA"></option><option value="Tchad"></option></datalist></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="bld-docs">Réception dernier document</label><input type="date" id="bld-docs" value="${esc(b.docs_received_at||"")}"></div>
+        <div class="field"><label for="bld-eta">ETA</label><input type="date" id="bld-eta" value="${esc(b.eta||"")}"></div>
+      </div>
+      <div id="bld-rca-row" class="field-row" style="${rca?'':'display:none;'}">
+        <div class="field"><label for="bld-decl">Date validation déclaration <span style="font-weight:400;color:var(--ink-soft);">(RCA)</span></label><input type="date" id="bld-decl" value="${esc(b.declaration_validated_at||"")}"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="bld-exit">Obtention ticket sortie (RTC/KTC)</label><input type="date" id="bld-exit" value="${esc(b.terminal_exit_at||"")}"></div>
+        <div class="field"><label for="bld-loaded">Date chargement</label><input type="date" id="bld-loaded" value="${esc(b.loaded_at||"")}"></div>
+        <div class="field"><label for="bld-delivered">Date livraison</label><input type="date" id="bld-delivered" value="${esc(b.delivered_at||"")}"></div>
+      </div>
+      ${calc}
+      <div class="field"><label for="bld-comment">Commentaires</label><textarea id="bld-comment" rows="2">${esc(b.comment||"")}</textarea></div>
+      <div id="bld-err"></div>
+      <div class="btn-row">
+        <button class="btn" data-action="bld-save" ${isNew?"":`data-id="${b.id}"`}>${isNew?"Créer le dossier":"Enregistrer"}</button>
+        ${(!isNew&&(isAdmin()||can("msc","delete")))?`<button class="btn danger" data-action="bld-del" data-id="${b.id}">Supprimer</button>`:""}
+      </div>
+      <div class="hint" style="font-size:11.5px;margin-top:8px;">Formalités = ticket sortie − la plus tardive de (ETA, réception docs). Livraison = livraison − chargement. La date de validation de déclaration n'apparaît que pour la destination RCA.</div>
+    </div>`;
+}
+function exportBldCSV(){
+  const list=bldFiltered().slice().sort((a,b)=>(b.docs_received_at||"").localeCompare(a.docs_received_at||""));
+  const cols=["N BL","Destination","Reception docs","ETA","Validation declaration (RCA)","Ticket sortie","Chargement","Livraison","Delai formalites (j)","Delai livraison (j)","Etat","Commentaire"];
+  const rows=list.map(b=>[b.bl_no||"", b.destination||"", b.docs_received_at||"", b.eta||"", b.declaration_validated_at||"", b.terminal_exit_at||"",
+    b.loaded_at||"", b.delivered_at||"", bldFormalites(b)!=null?bldFormalites(b):"", bldLivraison(b)!=null?bldLivraison(b):"", bldState(b).label, b.comment||""]);
+  const cell=x=>{ const v=String(x==null?"":x); return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+  const csv=[cols.join(";")].concat(rows.map(r=>r.map(cell).join(";"))).join("\r\n");
+  const blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8;"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download=`MSC_BLD_${new Date().toISOString().slice(0,10)}.csv`; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1500);
 }
 function exportMscCSV(){
   const list=mscFiltered().slice().sort((a,b)=>new Date(b.ticket_at)-new Date(a.ticket_at));
@@ -3557,6 +3740,10 @@ function bindEvents(){
   wire("af-status",e=>{state.assetFilter.status=e.target.value; state.assetPage=1; render();});
   wire("af-loc",e=>{state.assetFilter.loc=e.target.value; state.assetPage=1; render();});
   wire("msc-f-type",e=>{state.mscFilter.type=e.target.value; state.mscPage=1; render();});
+  wire("bld-f-dest",e=>{state.bldFilter.dest=e.target.value; state.bldPage=1; render();});
+  wire("bld-f-state",e=>{state.bldFilter.state=e.target.value; state.bldPage=1; render();});
+  { const el=document.getElementById("bld-f-search"); if(el) el.addEventListener("input",e=>{state.bldFilter.search=e.target.value; state.bldPage=1; render();}); }
+  { const el=document.getElementById("bld-dest"); if(el) el.addEventListener("input",e=>{ const row=document.getElementById("bld-rca-row"); if(row) row.style.display = (e.target.value.trim().toUpperCase()==="RCA")?"":"none"; }); }
   wire("msc-f-status",e=>{state.mscFilter.status=e.target.value; state.mscPage=1; render();});
   wire("msc-f-delay",e=>{state.mscFilter.delay=e.target.value; state.mscPage=1; render();});
   { const el=document.getElementById("msc-f-search"); if(el) el.addEventListener("input",e=>{state.mscFilter.search=e.target.value; state.mscPage=1; render();}); }
@@ -4139,6 +4326,41 @@ async function onAction(e){
   }
   if(action==="asset-page"){ state.assetPage=Math.max(1,parseInt(el.dataset.p,10)||1); render(); return; }
   if(action==="asset-export"){ exportAssetsCSV(); return; }
+  if(action==="msc-domain"){ state.mscDomain=el.dataset.dom; state.mscNew=false; state.mscSelectedId=null; state.bldNew=false; state.bldSelectedId=null; render(); return; }
+  if(action==="bld-subview"){ state.bldSubview=el.dataset.view; state.bldSelectedId=null; state.bldNew=false; render(); return; }
+  if(action==="bld-new"){ state.bldNew=true; state.bldSelectedId=null; render(); return; }
+  if(action==="bld-back"){ state.bldNew=false; state.bldSelectedId=null; render(); return; }
+  if(action==="bld-open"){ state.mscDomain="bld"; state.bldSelectedId=el.dataset.id; state.bldNew=false; render(); return; }
+  if(action==="bld-page"){ state.bldPage=Math.max(1,parseInt(el.dataset.p,10)||1); render(); return; }
+  if(action==="bld-export"){ exportBldCSV(); return; }
+  if(action==="bld-save"){
+    const g=x=>document.getElementById(x); const errb=g("bld-err");
+    const bl_no=((g("bld-no")||{value:""}).value||"").trim();
+    const destination=((g("bld-dest")||{value:""}).value||"").trim();
+    if(!bl_no){ if(errb) errb.innerHTML=`<div class="error-msg">Le n° BL est obligatoire.</div>`; return; }
+    if(!destination){ if(errb) errb.innerHTML=`<div class="error-msg">La destination est obligatoire.</div>`; return; }
+    const val=id=>{ const v=(g(id)||{value:""}).value; return v||null; };
+    const rca=(destination.toUpperCase()==="RCA");
+    const payload={ bl_no, destination,
+      docs_received_at:val("bld-docs"), eta:val("bld-eta"),
+      declaration_validated_at: rca?val("bld-decl"):null,   // ignoré hors RCA
+      terminal_exit_at:val("bld-exit"), loaded_at:val("bld-loaded"), delivered_at:val("bld-delivered"),
+      comment:((g("bld-comment")||{value:""}).value||"").trim()||null };
+    busy("Enregistrement…");
+    try{
+      if(el.dataset.id){ const { error } = await sb.from("msc_bld").update(payload).eq("id",el.dataset.id); if(error) throw error; }
+      else { payload.created_by=uid(); const { error } = await sb.from("msc_bld").insert(payload); if(error) throw error; }
+      state.bldNew=false; state.bldSelectedId=null; await reloadBld(); render();
+    }catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
+  if(action==="bld-del"){
+    if(!confirm("Supprimer ce dossier BLD ?")) return;
+    busy("…");
+    try{ await sb.from("msc_bld").delete().eq("id",el.dataset.id); state.bldSelectedId=null; await reloadBld(); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
   if(action==="msc-subview"){ state.mscSubview=el.dataset.view; state.mscSelectedId=null; state.mscNew=false; render(); return; }
   if(action==="msc-new"){ state.mscNew=true; state.mscSelectedId=null; render(); return; }
   if(action==="msc-back"){ state.mscNew=false; state.mscSelectedId=null; render(); return; }
