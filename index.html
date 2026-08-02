@@ -1164,6 +1164,7 @@ function exportBldCSV(){
 }
 // =========================== MODULE MSC — Dépôt (Évacuations) ===========================
 async function reloadEvac(){ const { data } = await sb.from("msc_evacuations").select("*").order("op_date",{ascending:false}); state.mscEvac=data||[]; }
+function evacReasons(){ return lkVals("msc_evac_reason", ["Retard au scanner","Embouteillage","Manque d'espace au terminal RTC","Indisponibilité de l'engin (RTC)","Refus de mise à disposition de camion par les transporteurs tierces"]); }
 function evacQuotaOk(e){ return Number(e.done_medlog)>=Number(e.demand_msc) && Number(e.demand_msc)>0; }
 function evacRate(e){ const d=Number(e.demand_msc)||0; return d?Math.round(Number(e.done_medlog)/d*100):0; }
 function evacInPeriod(e){ if(state.dashPeriod==="all") return true; const r=periodRange(); const ms=new Date(e.op_date).getTime(); return ms>=r.from && ms<=r.to; }
@@ -1197,6 +1198,10 @@ function renderEvacDashboard(){
   const byVessel=(()=>{const m={};all.forEach(e=>{const k=e.vessel||"—";if(!m[k])m[k]={demand:0,done:0};m[k].demand+=Number(e.demand_msc)||0;m[k].done+=Number(e.done_medlog)||0;});
     return Object.keys(m).map(k=>({label:k,count:m[k].done, sub:`${m[k].done}/${m[k].demand}`})).sort((a,b)=>b.count-a.count);})();
   const missed=all.filter(e=>!evacQuotaOk(e)).sort((a,b)=>evacRate(a)-evacRate(b)).slice(0,6);
+  const motifCount={};
+  all.filter(e=>!evacQuotaOk(e)).forEach(e=>{ const r=(e.reason||"").trim(); if(r) motifCount[r]=(motifCount[r]||0)+1; });
+  const motifRank=Object.keys(motifCount).map(k=>({label:k,count:motifCount[k]})).sort((a,b)=>b.count-a.count);
+  const motifCard=motifRank.length?`<div class="card"><div class="section-label">Motifs des quotas non atteints</div>${barList(motifRank.slice(0,8))}</div>`:"";
   const missedCard=`<div class="card"><div class="section-label">Quotas non atteints (${all.filter(e=>!evacQuotaOk(e)).length})</div>
     ${missed.length?missed.map(e=>`<div data-action="evac-open" data-id="${e.id}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;">
         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(e.vessel)} · ${esc(e.op_date)}</span>
@@ -1207,7 +1212,8 @@ function renderEvacDashboard(){
     <div class="filters"><div class="field" style="margin-bottom:0;"><label>Période</label>${periodSelect}</div>${customRange}
       ${canEditMsc()?`<button class="btn secondary" data-action="evac-new" style="align-self:flex-end;">+ Nouvelle évacuation</button>`:""}</div>
     ${kpis}
-    <div class="two-col">${vesselCard}${missedCard}</div>`;
+    <div class="two-col">${vesselCard}${missedCard}</div>
+    ${motifCard}`;
 }
 function renderEvacList(){
   const list=(state.mscEvac||[]).slice().sort((a,b)=>(b.op_date||"").localeCompare(a.op_date||""));
@@ -1244,7 +1250,8 @@ function renderEvacForm(e){
         <div class="field"><label for="ev-end">Date de fin</label><input type="date" id="ev-end" value="${esc(e.end_date||"")}"></div>
       </div>
       ${rate}
-      <div class="field"><label for="ev-comment">Commentaires</label><textarea id="ev-comment" rows="2">${esc(e.comment||"")}</textarea></div>
+      <div class="field"><label for="ev-reason">Motif (si quota non atteint)</label><select id="ev-reason"><option value="">— aucun —</option>${evacReasons().map(r=>`<option value="${esc(r)}" ${e.reason===r?'selected':''}>${esc(r)}</option>`).join("")}</select></div>
+      <div class="field"><label for="ev-comment">Commentaires (événement libre)</label><textarea id="ev-comment" rows="2">${esc(e.comment||"")}</textarea></div>
       <div id="ev-err"></div>
       <div class="btn-row">
         <button class="btn" data-action="evac-save" ${isNew?"":`data-id="${e.id}"`}>${isNew?"Créer":"Enregistrer"}</button>
@@ -1255,8 +1262,8 @@ function renderEvacForm(e){
 }
 function exportEvacCSV(){
   const list=(state.mscEvac||[]).slice().sort((a,b)=>(b.op_date||"").localeCompare(a.op_date||""));
-  const cols=["Navire","Date","Demande MSC","Realisation Medlog","Taux %","Quota","Date fin","Commentaire"];
-  const rows=list.map(e=>[e.vessel||"", e.op_date||"", e.demand_msc||0, e.done_medlog||0, evacRate(e), evacQuotaOk(e)?"Atteint":"Non atteint", e.end_date||"", e.comment||""]);
+  const cols=["Navire","Date","Demande MSC","Realisation Medlog","Taux %","Quota","Date fin","Motif","Commentaire"];
+  const rows=list.map(e=>[e.vessel||"", e.op_date||"", e.demand_msc||0, e.done_medlog||0, evacRate(e), evacQuotaOk(e)?"Atteint":"Non atteint", e.end_date||"", e.reason||"", e.comment||""]);
   const cell=x=>{ const v=String(x==null?"":x); return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
   const csv=[cols.join(";")].concat(rows.map(r=>r.map(cell).join(";"))).join("\r\n");
   const blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8;"});
@@ -4447,7 +4454,9 @@ async function onAction(e){
     if(isNaN(demand)||demand<0){ if(errb) errb.innerHTML=`<div class="error-msg">Demande MSC invalide.</div>`; return; }
     if(isNaN(done)||done<0){ if(errb) errb.innerHTML=`<div class="error-msg">Réalisation invalide.</div>`; return; }
     const payload={ vessel, op_date, demand_msc:demand, done_medlog:done,
-      end_date:(g("ev-end")||{value:""}).value||null, comment:((g("ev-comment")||{value:""}).value||"").trim()||null };
+      end_date:(g("ev-end")||{value:""}).value||null,
+      reason:((g("ev-reason")||{value:""}).value||"").trim()||null,
+      comment:((g("ev-comment")||{value:""}).value||"").trim()||null };
     busy("Enregistrement…");
     try{
       if(el.dataset.id){ const { error } = await sb.from("msc_evacuations").update(payload).eq("id",el.dataset.id); if(error) throw error; }
