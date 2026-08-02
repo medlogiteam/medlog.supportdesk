@@ -249,6 +249,7 @@ let state = {
   maintSubview:"annonces", lookupType:"service",
   adminUsers:[], usersLoaded:false,
   assets:[], assetCats:[], assetsLoaded:false, assetsSubview:"dashboard", assetSort:{col:"asset_tag", dir:"asc"}, assetPage:1, assetFilter:{cat:"all", status:"all", search:"", loc:"all", preset:"all"},
+  mscTickets:[], mscCapacity:[], mscLoaded:false, mscSubview:"dashboard", mscFilter:{type:"all", status:"all", delay:"all", search:""}, mscPage:1, mscSelectedId:null, mscNew:false,
   selectedAssetId:null, assetNew:false, assetEditOpen:false, assetMovements:[], profilesList:[],
   stockItems:[], stockLoaded:false, stockSubview:"inventory", stockSearch:"", stockMoves:[], locations:[], locationsLoaded:false,
   selectedStockId:null, stockNew:false,
@@ -297,6 +298,7 @@ function canMoveStock(){ return canWrite("stock"); }
 function canViewProcurement(){ return can("procurement","view"); }
 function canCreatePr(){ return can("procurement","create"); }
 function canViewProjects(){ return can("projects","view"); }
+function canViewMsc(){ return can("msc","view"); }
 function canManageProjects(){ return canWrite("projects"); }
 function canViewActivities(){ return can("activities","view"); }
 function canManageActivities(){ return canWrite("activities"); }
@@ -337,6 +339,7 @@ const SCREENS = [
   {key:"procurement", label:"Achats"},
   {key:"projects",    label:"Projets"},
   {key:"activities",  label:"Suivi par service"},
+  {key:"msc",         label:"Opérations MSC"},
   {key:"maintenance", label:"Maintenance (administration)"},
 ];
 const PERM_ACTIONS = [["view","Voir"],["create","Créer"],["edit","Modifier"],["delete","Supprimer"]];
@@ -584,6 +587,7 @@ function navGroups(){
         {v:"stock", l:"Stock", show:()=>canViewStock()},
         {v:"procurement", l:"Achats", show:()=>canViewProcurement()} ] },
     { key:"projects", label:"Projets", leaves:[ {v:"projects", l:"Projets", show:()=>canViewProjects()||canViewActivities()} ] },
+    { key:"msc", label:"Opérations MSC", leaves:[ {v:"msc", l:"Intermodal", show:()=>canViewMsc()} ] },
     { key:"maint", label:"Maintenance", leaves:[ {v:"maintenance", l:"Maintenance", show:()=>isAdmin()} ] },
   ].filter(g=> g.leaves.some(lf=>lf.show()));
 }
@@ -617,8 +621,235 @@ function renderMain(){
   if(state.view==="stock") return canViewStock()?sub+renderStockArea():"";
   if(state.view==="procurement") return canViewProcurement()?sub+renderProcurementArea():"";
   if(state.view==="projects") return (canViewProjects()||canViewActivities())?renderProjectsArea():"";
+  if(state.view==="msc") return canViewMsc()?renderMscArea():"";
   if(state.view==="maintenance") return isAdmin()?renderMaintenance():"";
   return "";
+}
+
+// =========================== MODULE MSC (Lot 1 — Intermodal) ===========================
+const MSC_STATUSES=[["Pris","Pris"],["Non envoyé","Non envoyé"],["Camion indisponible","Camion indisponible"]];
+function mscStatusBadge(s){ const m={"Pris":"closed","Non envoyé":"pending","Camion indisponible":"reopened"}; return `<span class="badge ${m[s]||'pending'}">${esc(s)}</span>`; }
+// Verdict de délai : échéance = ticket_at + validity_hours.
+function mscDelay(t){
+  if(!t.ticket_at || !t.validity_hours) return { key:"na", label:"—", col:"var(--ink-faint)" };
+  const due=new Date(t.ticket_at).getTime() + Number(t.validity_hours)*3600000;
+  if(t.delivered_at){
+    const ok=new Date(t.delivered_at).getTime()<=due;
+    return ok ? { key:"ok", label:"Respecté", col:"#15803D" } : { key:"late", label:"Dépassé", col:"var(--critical)" };
+  }
+  return Date.now()>due ? { key:"overdue", label:"En retard", col:"var(--critical)" }
+                        : { key:"running", label:"En cours", col:"#B45309" };
+}
+function mscDelayBadge(t){ const d=mscDelay(t); return `<span class="badge" style="background:${d.col}22;color:${d.col};">${d.label}</span>`; }
+function mscDue(t){ return t.ticket_at&&t.validity_hours ? new Date(new Date(t.ticket_at).getTime()+Number(t.validity_hours)*3600000) : null; }
+
+async function loadMsc(){
+  try{
+    const [tk, cap] = await Promise.all([
+      sb.from("msc_tickets").select("*").order("ticket_at",{ascending:false}),
+      sb.from("msc_daily_capacity").select("*").order("day",{ascending:false})
+    ]);
+    state.mscTickets=tk.data||[]; state.mscCapacity=cap.data||[]; state.mscLoaded=true; render();
+  }catch(e){ state.mscTickets=[]; state.mscCapacity=[]; state.mscLoaded=true; render(); }
+}
+async function reloadMsc(){
+  const { data } = await sb.from("msc_tickets").select("*").order("ticket_at",{ascending:false});
+  state.mscTickets=data||[];
+}
+function canEditMsc(){ return canWrite("msc"); }
+
+// Période : réutilise le sélecteur du tableau de bord (state.dashPeriod / periodRange).
+function mscInPeriod(dateVal){
+  if(state.dashPeriod==="all") return true;
+  const r=periodRange(); const ms=new Date(dateVal).getTime();
+  return ms>=r.from && ms<=r.to;
+}
+function renderMscArea(){
+  if(!canViewMsc()) return `<div class="empty-state">Accès non autorisé.</div>`;
+  if(!state.mscLoaded){ loadMsc(); return `<div class="empty-state">Chargement des opérations MSC…</div>`; }
+  const sub=`<div class="subnav">
+    <button data-action="msc-subview" data-view="dashboard" class="${state.mscSubview!=="list"&&state.mscSubview!=="capacity"?'active':''}">Tableau de bord</button>
+    <button data-action="msc-subview" data-view="list" class="${state.mscSubview==="list"?'active':''}">Tickets (${state.mscTickets.length})</button>
+    <button data-action="msc-subview" data-view="capacity" class="${state.mscSubview==="capacity"?'active':''}">Disponibilité flotte</button>
+  </div>`;
+  if(state.mscSelectedId){ const t=state.mscTickets.find(x=>x.id===state.mscSelectedId); if(t) return `<button class="back-link" data-action="msc-back">&larr; Retour</button>`+renderMscForm(t); state.mscSelectedId=null; }
+  if(state.mscNew && canEditMsc()) return `<button class="back-link" data-action="msc-back">&larr; Retour</button>`+renderMscForm(null);
+  if(state.mscSubview==="list") return sub+renderMscList();
+  if(state.mscSubview==="capacity") return sub+renderMscCapacity();
+  return sub+renderMscDashboard();
+}
+
+function mscFiltered(){
+  const f=state.mscFilter||{};
+  let list=state.mscTickets.slice();
+  if(f.type&&f.type!=="all") list=list.filter(t=>t.container_type===f.type);
+  if(f.status&&f.status!=="all") list=list.filter(t=>t.status===f.status);
+  if(f.delay&&f.delay!=="all") list=list.filter(t=>mscDelay(t).key===f.delay);
+  if((f.search||"").trim()){ const q=f.search.toLowerCase();
+    list=list.filter(t=>(t.ticket_no||"").toLowerCase().includes(q)||(t.destination||"").toLowerCase().includes(q)||(t.reason||"").toLowerCase().includes(q)); }
+  return list;
+}
+function renderMscDashboard(){
+  const all=state.mscTickets.filter(t=>mscInPeriod(t.ticket_at));
+  const prop=all.length;                                   // tout ticket proposé
+  const pris=all.filter(t=>t.status==="Pris").length;
+  const nonEnv=all.filter(t=>t.status==="Non envoyé").length;
+  const camInd=all.filter(t=>t.status==="Camion indisponible").length;
+  const pct=(n,d)=>d?Math.round(n/d*100):0;
+  // Utilisation flotte : tickets pris / camions dispo sur la période.
+  const cap=state.mscCapacity.filter(c=>mscInPeriod(c.day)).reduce((a,c)=>a+(c.trucks_20||0)+(c.trucks_40||0),0);
+  const periods=[["all","Toutes périodes"],["today","Aujourd'hui"],["yesterday","Hier"],["last7","7 derniers jours"],["this_month","Ce mois"],["prev_month","Mois précédent"],["this_year","Cette année"],["custom","Personnalisée"]];
+  const periodSelect=`<select id="dash-period">${periods.map(([v,l])=>`<option value="${v}" ${state.dashPeriod===v?'selected':''}>${l}</option>`).join("")}</select>`;
+  const customRange=state.dashPeriod==="custom"?`<div class="field" style="margin-bottom:0;"><label>Du</label><input type="date" id="cf" value="${esc(state.customFrom)}"></div><div class="field" style="margin-bottom:0;"><label>Au</label><input type="date" id="ct" value="${esc(state.customTo)}"></div>`:"";
+  const kpis=`<div class="stat-row">
+    <div class="stat"><div class="n">${prop}</div><div class="l">Proposés</div></div>
+    <div class="stat accent"><div class="n">${pris}</div><div class="l">Pris</div></div>
+    <div class="stat ${nonEnv?'alert':''}"><div class="n">${nonEnv}</div><div class="l">Non envoyés</div></div>
+    <div class="stat ${camInd?'alert':''}"><div class="n">${camInd}</div><div class="l">Camion indispo.</div></div>
+    <div class="stat accent"><div class="n">${pct(pris,prop)}%</div><div class="l">Taux conversion</div></div>
+    <div class="stat"><div class="n">${cap?pct(pris,cap):"—"}${cap?"%":""}</div><div class="l">Utilisation flotte</div></div>
+  </div>`;
+  const taux=`<div class="stat-row" style="margin-top:0;">
+    <div class="stat ${camInd?'alert':''}"><div class="n">${pct(camInd,prop)}%</div><div class="l">Taux camion indispo.</div></div>
+    <div class="stat ${nonEnv?'alert':''}"><div class="n">${pct(nonEnv,prop)}%</div><div class="l">Taux non envoyé</div></div>
+    <div class="stat"><div class="n">${all.filter(t=>t.container_type==="20").length}</div><div class="l">Conteneurs 20'</div></div>
+    <div class="stat"><div class="n">${all.filter(t=>t.container_type==="40").length}</div><div class="l">Conteneurs 40'</div></div>
+  </div>`;
+  // Délais sur la période
+  const dcount=k=>all.filter(t=>mscDelay(t).key===k).length;
+  const delivered=all.filter(t=>t.delivered_at);
+  const okD=delivered.filter(t=>mscDelay(t).key==="ok").length;
+  const delayBars=[
+    {label:"Respecté", count:dcount("ok"), val:"ok"},
+    {label:"Dépassé (livré tard)", count:dcount("late"), val:"late"},
+    {label:"En retard (non livré)", count:dcount("overdue"), val:"overdue"},
+    {label:"En cours", count:dcount("running"), val:"running"},
+  ].filter(x=>x.count>0);
+  const motifs=(()=>{const m={};all.filter(t=>t.reason&&(mscDelay(t).key==="late"||mscDelay(t).key==="overdue"||t.status!=="Pris")).forEach(t=>{const k=t.reason.trim();m[k]=(m[k]||0)+1;});return Object.keys(m).map(k=>({label:k,count:m[k]})).sort((a,b)=>b.count-a.count).slice(0,6);})();
+  const overdueList=all.filter(t=>mscDelay(t).key==="overdue").sort((a,b)=>mscDue(a)-mscDue(b)).slice(0,6);
+  return `<h1 class="page-title">Opérations MSC — Intermodal</h1><p class="page-sub">Suivi du transport intermodal opéré pour MSC.</p>
+    <div class="filters"><div class="field" style="margin-bottom:0;"><label>Période</label>${periodSelect}</div>${customRange}
+      ${canEditMsc()?`<button class="btn secondary" data-action="msc-new" style="align-self:flex-end;">+ Nouveau ticket</button>`:""}</div>
+    ${kpis}${taux}
+    <div class="two-col">
+      <div class="card"><div class="section-label">Respect des délais</div>${delayBars.length?barListNav(delayBars,"msc-delay-bar"):`<div class="empty-state" style="padding:22px;">Aucun ticket sur la période.</div>`}
+        <div class="hint" style="font-size:11.5px;margin-top:8px;">${delivered.length?`${pct(okD,delivered.length)}% des tickets livrés l'ont été dans les délais.`:"Aucune livraison enregistrée sur la période."}</div></div>
+      <div class="card"><div class="section-label">Principaux motifs</div>${motifs.length?barList(motifs):`<div class="empty-state" style="padding:22px;">Aucun motif renseigné.</div>`}</div>
+    </div>
+    ${overdueList.length?`<div class="card" style="border-left:4px solid var(--critical);"><div class="section-label">En retard — non livrés, échéance dépassée (${overdueList.length})</div>
+      ${overdueList.map(t=>`<div data-action="msc-open" data-id="${t.id}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t.ticket_no||"(sans n°)")} · ${esc(t.container_type)}' · ${esc(t.destination||"—")}</span>
+        <span style="flex:0 0 auto;font-size:11.5px;color:var(--critical);font-weight:600;">échéance ${fmtDate(mscDue(t))}</span></div>`).join("")}</div>`:""}`;
+}
+function renderMscList(){
+  const f=state.mscFilter||{};
+  const list=mscFiltered();
+  const sorted=list.slice().sort((a,b)=>new Date(b.ticket_at)-new Date(a.ticket_at));
+  const PAGE=50, total=sorted.length, pages=Math.max(1,Math.ceil(total/PAGE));
+  const page=Math.min(Math.max(1,state.mscPage||1),pages);
+  const slice=sorted.slice((page-1)*PAGE, page*PAGE);
+  const typeOpts=`<option value="all">Tous types</option>`+["20","40"].map(x=>`<option value="${x}" ${f.type===x?'selected':''}>${x}'</option>`).join("");
+  const stOpts=`<option value="all">Tous statuts</option>`+MSC_STATUSES.map(([v,l])=>`<option value="${v}" ${f.status===v?'selected':''}>${l}</option>`).join("");
+  const dlOpts=`<option value="all">Tous délais</option>`+[["ok","Respecté"],["late","Dépassé"],["overdue","En retard"],["running","En cours"]].map(([v,l])=>`<option value="${v}" ${f.delay===v?'selected':''}>${l}</option>`).join("");
+  const rows=slice.map(t=>{
+    const d=mscDelay(t);
+    return `<tr data-action="msc-open" data-id="${t.id}">
+      <td style="font-family:var(--mono);font-size:12px;">${esc(t.ticket_no||"—")}</td>
+      <td>${esc(t.container_type)}'</td>
+      <td style="font-size:12px;">${fmtDate(t.ticket_at)}</td>
+      <td style="color:var(--ink-soft);">${esc(t.destination||"—")}</td>
+      <td>${mscStatusBadge(t.status)}</td>
+      <td style="font-size:12px;color:var(--ink-soft);">${t.delivered_at?fmtDate(t.delivered_at):"—"}</td>
+      <td><span class="badge" style="background:${d.col}22;color:${d.col};">${d.label}</span></td>
+    </tr>`;
+  }).join("");
+  const pager=pages>1?`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;flex-wrap:wrap;">
+      <span style="font-size:12px;color:var(--ink-soft);">${(page-1)*PAGE+1}–${Math.min(page*PAGE,total)} sur ${total}</span>
+      <div class="btn-row"><button class="btn tiny secondary" data-action="msc-page" data-p="${page-1}" ${page<=1?"disabled":""}>◀</button>
+        <span style="font-size:12.5px;">page ${page} / ${pages}</span>
+        <button class="btn tiny secondary" data-action="msc-page" data-p="${page+1}" ${page>=pages?"disabled":""}>▶</button></div></div>`:"";
+  return `<h1 class="page-title">Tickets intermodal</h1><p class="page-sub">${total} ticket(s) affiché(s)${total!==state.mscTickets.length?` sur ${state.mscTickets.length}`:""}.</p>
+    <div class="filters">
+      <div class="field"><label>Type</label><select id="msc-f-type">${typeOpts}</select></div>
+      <div class="field"><label>Statut</label><select id="msc-f-status">${stOpts}</select></div>
+      <div class="field"><label>Délai</label><select id="msc-f-delay">${dlOpts}</select></div>
+      <div class="field search"><label>Recherche</label><input type="text" id="msc-f-search" placeholder="N°, destination, motif…" value="${esc(f.search||'')}"></div>
+      <button class="btn tiny secondary" data-action="msc-export" style="align-self:flex-end;">Exporter CSV</button>
+      ${canEditMsc()?`<button class="btn secondary" data-action="msc-new">+ Nouveau ticket</button>`:""}
+    </div>
+    ${total?`<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;background:var(--surface);"><table class="dense">
+      <thead><tr><th>N°</th><th>Type</th><th>Date ticket</th><th>Destination</th><th>Statut</th><th>Livré le</th><th>Délai</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>${pager}`:`<div class="empty-state">Aucun ticket ne correspond.</div>`}`;
+}
+function renderMscForm(t){
+  const isNew=!t; t=t||{};
+  const toLocal=v=>{ if(!v) return ""; const d=new Date(v); const p=n=>String(n).padStart(2,"0"); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
+  const typeOpts=["20","40"].map(x=>`<option value="${x}" ${t.container_type===x?'selected':''}>${x}'</option>`).join("");
+  const stOpts=MSC_STATUSES.map(([v,l])=>`<option value="${v}" ${(t.status||"Pris")===v?'selected':''}>${l}</option>`).join("");
+  const delayInfo = (!isNew) ? `<div class="hint" style="font-size:12px;margin-top:-4px;">Verdict actuel : <strong style="color:${mscDelay(t).col};">${mscDelay(t).label}</strong>${mscDue(t)?` · échéance ${fmtDate(mscDue(t))}`:""}</div>` : "";
+  return `<h1 class="page-title">${isNew?"Nouveau ticket intermodal":"Ticket "+(esc(t.ticket_no)||"")}</h1>
+    <div class="card">
+      <div class="field-row">
+        <div class="field"><label for="msc-no">N° ticket MSC</label><input type="text" id="msc-no" value="${esc(t.ticket_no||"")}" placeholder="ex : 12345"></div>
+        <div class="field"><label for="msc-type">Type de conteneur</label><select id="msc-type">${typeOpts}</select></div>
+        <div class="field"><label for="msc-status">Statut</label><select id="msc-status">${stOpts}</select></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="msc-at">Date / heure du ticket</label><input type="datetime-local" id="msc-at" value="${toLocal(t.ticket_at)}"></div>
+        <div class="field"><label for="msc-validity">Délai de validité (heures)</label><input type="text" id="msc-validity" value="${t.validity_hours!=null?esc(t.validity_hours):""}" placeholder="ex : 24"></div>
+        <div class="field"><label for="msc-dest">Destination</label><input type="text" id="msc-dest" value="${esc(t.destination||"")}"></div>
+      </div>
+      ${delayInfo}
+      <div class="field-row">
+        <div class="field"><label for="msc-received">Réception (date / heure)</label><input type="datetime-local" id="msc-received" value="${toLocal(t.received_at)}"></div>
+        <div class="field"><label for="msc-delivered">Livraison (date / heure)</label><input type="datetime-local" id="msc-delivered" value="${toLocal(t.delivered_at)}"></div>
+      </div>
+      <div class="field"><label for="msc-reason">Motif (si dépassé / non réalisé)</label><input type="text" id="msc-reason" value="${esc(t.reason||"")}" placeholder="ex : Maintenance camion, Indisponibilité carburant…"></div>
+      <div class="field"><label for="msc-comment">Commentaires</label><textarea id="msc-comment" rows="2">${esc(t.comment||"")}</textarea></div>
+      <div id="msc-err"></div>
+      <div class="btn-row">
+        <button class="btn" data-action="msc-save" ${isNew?"":`data-id="${t.id}"`}>${isNew?"Créer le ticket":"Enregistrer"}</button>
+        ${(!isNew&&(isAdmin()||can("msc","delete")))?`<button class="btn danger" data-action="msc-del" data-id="${t.id}">Supprimer</button>`:""}
+      </div>
+      <div class="hint" style="font-size:11.5px;margin-top:8px;">Le verdict de délai (Respecté / Dépassé / En retard / En cours) est calculé automatiquement : échéance = date du ticket + délai de validité.</div>
+    </div>`;
+}
+function renderMscCapacity(){
+  const rows=state.mscCapacity.slice().sort((a,b)=>b.day.localeCompare(a.day)).map(c=>`<tr>
+      <td>${esc(c.day)}</td><td style="font-family:var(--mono);">${c.trucks_20}</td><td style="font-family:var(--mono);">${c.trucks_40}</td>
+      <td style="font-family:var(--mono);">${(c.trucks_20||0)+(c.trucks_40||0)}</td>
+      <td style="color:var(--ink-soft);">${esc(c.note||"")}</td>
+      ${canEditMsc()?`<td style="text-align:right;">${(isAdmin()||can("msc","delete"))?`<button class="pj-ico" data-action="msc-cap-del" data-id="${c.id}" title="Supprimer" style="color:var(--critical);">✕</button>`:""}</td>`:"<td></td>"}
+    </tr>`).join("");
+  const form=canEditMsc()?`<div class="card" style="margin-bottom:16px;"><div class="section-label">Saisir la disponibilité d'un jour</div>
+      <div class="field-row">
+        <div class="field"><label for="cap-day">Date</label><input type="date" id="cap-day" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="field"><label for="cap-20">Camions 20'</label><input type="text" id="cap-20" placeholder="0"></div>
+        <div class="field"><label for="cap-40">Camions 40'</label><input type="text" id="cap-40" placeholder="0"></div>
+      </div>
+      <div class="field"><label for="cap-note">Note (optionnel)</label><input type="text" id="cap-note"></div>
+      <div id="cap-err"></div>
+      <button class="btn" data-action="msc-cap-save">Enregistrer</button>
+      <div class="hint" style="font-size:11.5px;margin-top:8px;">Une seule saisie par date (une nouvelle saisie du même jour remplace la précédente). Sert au calcul du taux d'utilisation de la flotte.</div>
+    </div>`:"";
+  return `<h1 class="page-title">Disponibilité de la flotte</h1><p class="page-sub">Camions disponibles par jour, pour le calcul du taux d'utilisation.</p>
+    ${form}
+    ${state.mscCapacity.length?`<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;background:var(--surface);"><table class="dense">
+      <thead><tr><th>Date</th><th>20'</th><th>40'</th><th>Total</th><th>Note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:`<div class="empty-state">Aucune disponibilité saisie.</div>`}`;
+}
+function exportMscCSV(){
+  const list=mscFiltered().slice().sort((a,b)=>new Date(b.ticket_at)-new Date(a.ticket_at));
+  const cols=["N ticket","Type","Date ticket","Delai validite (h)","Statut","Destination","Reception","Livraison","Echeance","Verdict","Motif","Commentaire"];
+  const rows=list.map(t=>{ const d=mscDelay(t), due=mscDue(t);
+    return [t.ticket_no||"", t.container_type+"'", t.ticket_at?new Date(t.ticket_at).toLocaleString("fr-FR"):"", t.validity_hours!=null?t.validity_hours:"",
+      t.status, t.destination||"", t.received_at?new Date(t.received_at).toLocaleString("fr-FR"):"", t.delivered_at?new Date(t.delivered_at).toLocaleString("fr-FR"):"",
+      due?due.toLocaleString("fr-FR"):"", d.label, t.reason||"", t.comment||""]; });
+  const cell=x=>{ const v=String(x==null?"":x); return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+  const csv=[cols.join(";")].concat(rows.map(r=>r.map(cell).join(";"))).join("\r\n");
+  const blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8;"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download=`MSC_intermodal_${new Date().toISOString().slice(0,10)}.csv`; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1500);
 }
 
 // =========================== MON COMPTE ===========================
@@ -3186,6 +3417,10 @@ function bindEvents(){
   wire("af-cat",e=>{state.assetFilter.cat=e.target.value; state.assetPage=1; render();});
   wire("af-status",e=>{state.assetFilter.status=e.target.value; state.assetPage=1; render();});
   wire("af-loc",e=>{state.assetFilter.loc=e.target.value; state.assetPage=1; render();});
+  wire("msc-f-type",e=>{state.mscFilter.type=e.target.value; state.mscPage=1; render();});
+  wire("msc-f-status",e=>{state.mscFilter.status=e.target.value; state.mscPage=1; render();});
+  wire("msc-f-delay",e=>{state.mscFilter.delay=e.target.value; state.mscPage=1; render();});
+  { const el=document.getElementById("msc-f-search"); if(el) el.addEventListener("input",e=>{state.mscFilter.search=e.target.value; state.mscPage=1; render();}); }
   const af=document.getElementById("af-search");
   if(af){ af.addEventListener("input",e=>{state.assetFilter.search=e.target.value; state.assetPage=1; render();}); af.focus(); af.setSelectionRange(af.value.length,af.value.length); }
   const sts=document.getElementById("st-search");
@@ -3765,6 +4000,62 @@ async function onAction(e){
   }
   if(action==="asset-page"){ state.assetPage=Math.max(1,parseInt(el.dataset.p,10)||1); render(); return; }
   if(action==="asset-export"){ exportAssetsCSV(); return; }
+  if(action==="msc-subview"){ state.mscSubview=el.dataset.view; state.mscSelectedId=null; state.mscNew=false; render(); return; }
+  if(action==="msc-new"){ state.mscNew=true; state.mscSelectedId=null; render(); return; }
+  if(action==="msc-back"){ state.mscNew=false; state.mscSelectedId=null; render(); return; }
+  if(action==="msc-open"){ state.mscSelectedId=el.dataset.id; state.mscNew=false; render(); return; }
+  if(action==="msc-page"){ state.mscPage=Math.max(1,parseInt(el.dataset.p,10)||1); render(); return; }
+  if(action==="msc-export"){ exportMscCSV(); return; }
+  if(action==="msc-delay-bar"){ state.mscFilter.delay=el.dataset.val; state.mscSubview="list"; state.mscPage=1; render(); return; }
+  if(action==="msc-save"){
+    const g=x=>document.getElementById(x); const errb=g("msc-err");
+    const toISO=id=>{ const v=(g(id)||{value:""}).value; return v?new Date(v).toISOString():null; };
+    const ticket_at=toISO("msc-at");
+    const rawVal=((g("msc-validity")||{value:""}).value||"").trim().replace(",",".");
+    const validity=Number(rawVal);
+    if(!ticket_at){ if(errb) errb.innerHTML=`<div class="error-msg">La date du ticket est obligatoire.</div>`; return; }
+    if(!rawVal||isNaN(validity)||validity<=0){ if(errb) errb.innerHTML=`<div class="error-msg">Le délai de validité (heures) doit être un nombre positif.</div>`; return; }
+    const payload={ ticket_no:((g("msc-no")||{value:""}).value||"").trim()||null,
+      container_type:(g("msc-type")||{value:"20"}).value, status:(g("msc-status")||{value:"Pris"}).value,
+      ticket_at, validity_hours:validity, destination:((g("msc-dest")||{value:""}).value||"").trim()||null,
+      received_at:toISO("msc-received"), delivered_at:toISO("msc-delivered"),
+      reason:((g("msc-reason")||{value:""}).value||"").trim()||null, comment:((g("msc-comment")||{value:""}).value||"").trim()||null };
+    busy("Enregistrement…");
+    try{
+      if(el.dataset.id){ const { error } = await sb.from("msc_tickets").update(payload).eq("id",el.dataset.id); if(error) throw error; }
+      else { payload.created_by=uid(); const { error } = await sb.from("msc_tickets").insert(payload); if(error) throw error; }
+      state.mscNew=false; state.mscSelectedId=null; await reloadMsc(); render();
+    }catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
+  if(action==="msc-del"){
+    if(!confirm("Supprimer ce ticket ?")) return;
+    busy("…");
+    try{ await sb.from("msc_tickets").delete().eq("id",el.dataset.id); state.mscSelectedId=null; await reloadMsc(); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="msc-cap-save"){
+    const g=x=>document.getElementById(x); const errb=g("cap-err");
+    const day=(g("cap-day")||{value:""}).value;
+    const t20=parseInt(((g("cap-20")||{value:"0"}).value||"0"),10)||0;
+    const t40=parseInt(((g("cap-40")||{value:"0"}).value||"0"),10)||0;
+    if(!day){ if(errb) errb.innerHTML=`<div class="error-msg">La date est obligatoire.</div>`; return; }
+    busy("…");
+    try{ const { error } = await sb.from("msc_daily_capacity").upsert({ day, trucks_20:t20, trucks_40:t40,
+        note:((g("cap-note")||{value:""}).value||"").trim()||null, created_by:uid() }, { onConflict:"day" }); if(error) throw error;
+      const { data } = await sb.from("msc_daily_capacity").select("*").order("day",{ascending:false}); state.mscCapacity=data||[]; render();
+    }catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
+  if(action==="msc-cap-del"){
+    if(!confirm("Supprimer cette disponibilité ?")) return;
+    busy("…");
+    try{ await sb.from("msc_daily_capacity").delete().eq("id",el.dataset.id);
+      const { data } = await sb.from("msc_daily_capacity").select("*").order("day",{ascending:false}); state.mscCapacity=data||[]; render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
   if(action==="asset-subview"){ state.assetsSubview=el.dataset.view; render(); return; }
   if(action==="asset-filter-clear"){ state.assetFilter={cat:"all", status:"all", search:"", loc:"all", preset:"all"}; state.assetPage=1; render(); return; }
   if(action==="asset-kpi"){
