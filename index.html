@@ -249,7 +249,7 @@ let state = {
   maintSubview:"annonces", lookupType:"service",
   adminUsers:[], usersLoaded:false,
   assets:[], assetCats:[], assetsLoaded:false, assetsSubview:"dashboard", assetSort:{col:"asset_tag", dir:"asc"}, assetPage:1, assetFilter:{cat:"all", status:"all", search:"", loc:"all", preset:"all"},
-  mscTickets:[], mscCapacity:[], mscTrucks:[], mscBld:[], mscLoaded:false, mscDomain:"intermodal", mscSubview:"dashboard", bldSubview:"dashboard", bldSelectedId:null, bldNew:false, bldFilter:{dest:"all", state:"all", search:""}, bldPage:1, mscFilter:{type:"all", status:"all", delay:"all", search:""}, mscPage:1, mscSelectedId:null, mscNew:false,
+  mscTickets:[], mscCapacity:[], mscTrucks:[], mscBld:[], mscEvac:[], mscLoaded:false, mscDomain:"intermodal", mscSubview:"dashboard", bldSubview:"dashboard", bldSelectedId:null, bldNew:false, bldFilter:{dest:"all", state:"all", search:""}, bldPage:1, depSubview:"dashboard", evacSelectedId:null, evacNew:false, mscFilter:{type:"all", status:"all", delay:"all", search:""}, mscPage:1, mscSelectedId:null, mscNew:false,
   selectedAssetId:null, assetNew:false, assetEditOpen:false, assetMovements:[], profilesList:[],
   stockItems:[], stockLoaded:false, stockSubview:"inventory", stockSearch:"", stockMoves:[], locations:[], locationsLoaded:false,
   selectedStockId:null, stockNew:false,
@@ -645,14 +645,15 @@ function mscDue(t){ return t.ticket_at&&t.validity_hours ? new Date(new Date(t.t
 
 async function loadMsc(){
   try{
-    const [tk, cap, tr, bld] = await Promise.all([
+    const [tk, cap, tr, bld, ev] = await Promise.all([
       sb.from("msc_tickets").select("*").order("ticket_at",{ascending:false}),
       sb.from("msc_daily_capacity").select("*").order("day",{ascending:false}),
       sb.from("msc_trucks").select("*").order("plate"),
-      sb.from("msc_bld").select("*").order("docs_received_at",{ascending:false})
+      sb.from("msc_bld").select("*").order("docs_received_at",{ascending:false}),
+      sb.from("msc_evacuations").select("*").order("op_date",{ascending:false})
     ]);
-    state.mscTickets=tk.data||[]; state.mscCapacity=cap.data||[]; state.mscTrucks=tr.data||[]; state.mscBld=bld.data||[]; state.mscLoaded=true; render();
-  }catch(e){ state.mscTickets=[]; state.mscCapacity=[]; state.mscTrucks=[]; state.mscBld=[]; state.mscLoaded=true; render(); }
+    state.mscTickets=tk.data||[]; state.mscCapacity=cap.data||[]; state.mscTrucks=tr.data||[]; state.mscBld=bld.data||[]; state.mscEvac=ev.data||[]; state.mscLoaded=true; render();
+  }catch(e){ state.mscTickets=[]; state.mscCapacity=[]; state.mscTrucks=[]; state.mscBld=[]; state.mscEvac=[]; state.mscLoaded=true; render(); }
 }
 async function reloadMsc(){
   const { data } = await sb.from("msc_tickets").select("*").order("ticket_at",{ascending:false});
@@ -690,8 +691,10 @@ function renderMscArea(){
   const domNav=`<div class="subnav" style="margin-bottom:6px;">
     <button data-action="msc-domain" data-dom="intermodal" class="${dom==="intermodal"?'active':''}">Intermodal</button>
     <button data-action="msc-domain" data-dom="bld" class="${dom==="bld"?'active':''}">BLD Hinterland</button>
+    <button data-action="msc-domain" data-dom="depot" class="${dom==="depot"?'active':''}">Dépôt</button>
   </div>`;
   if(dom==="bld") return domNav+renderMscBldArea();
+  if(dom==="depot") return domNav+renderMscDepotArea();
   // --- Domaine Intermodal ---
   const sub=`<div class="subnav">
     <button data-action="msc-subview" data-view="dashboard" class="${state.mscSubview!=="list"&&state.mscSubview!=="capacity"&&state.mscSubview!=="trucks"?'active':''}">Tableau de bord</button>
@@ -1157,6 +1160,108 @@ function exportBldCSV(){
   const blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8;"});
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
   a.download=`MSC_BLD_${new Date().toISOString().slice(0,10)}.csv`; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1500);
+}
+// =========================== MODULE MSC — Dépôt (Évacuations) ===========================
+async function reloadEvac(){ const { data } = await sb.from("msc_evacuations").select("*").order("op_date",{ascending:false}); state.mscEvac=data||[]; }
+function evacQuotaOk(e){ return Number(e.done_medlog)>=Number(e.demand_msc) && Number(e.demand_msc)>0; }
+function evacRate(e){ const d=Number(e.demand_msc)||0; return d?Math.round(Number(e.done_medlog)/d*100):0; }
+function evacInPeriod(e){ if(state.dashPeriod==="all") return true; const r=periodRange(); const ms=new Date(e.op_date).getTime(); return ms>=r.from && ms<=r.to; }
+
+function renderMscDepotArea(){
+  const sub=`<div class="subnav">
+    <button data-action="dep-subview" data-view="dashboard" class="${state.depSubview!=="list"?'active':''}">Tableau de bord</button>
+    <button data-action="dep-subview" data-view="list" class="${state.depSubview==="list"?'active':''}">Évacuations (${(state.mscEvac||[]).length})</button>
+  </div>`;
+  if(state.evacSelectedId){ const e=(state.mscEvac||[]).find(x=>x.id===state.evacSelectedId); if(e) return `<button class="back-link" data-action="dep-back">&larr; Retour</button>`+renderEvacForm(e); state.evacSelectedId=null; }
+  if(state.evacNew && canEditMsc()) return `<button class="back-link" data-action="dep-back">&larr; Retour</button>`+renderEvacForm(null);
+  if(state.depSubview==="list") return sub+renderEvacList();
+  return sub+renderEvacDashboard();
+}
+function renderEvacDashboard(){
+  const all=(state.mscEvac||[]).filter(evacInPeriod);
+  const totDemand=all.reduce((a,e)=>a+(Number(e.demand_msc)||0),0);
+  const totDone=all.reduce((a,e)=>a+(Number(e.done_medlog)||0),0);
+  const okCount=all.filter(evacQuotaOk).length;
+  const globalRate=totDemand?Math.round(totDone/totDemand*100):0;
+  const periods=[["all","Toutes périodes"],["today","Aujourd'hui"],["yesterday","Hier"],["last7","7 derniers jours"],["this_month","Ce mois"],["prev_month","Mois précédent"],["this_year","Cette année"],["custom","Personnalisée"]];
+  const periodSelect=`<select id="dash-period">${periods.map(([v,l])=>`<option value="${v}" ${state.dashPeriod===v?'selected':''}>${l}</option>`).join("")}</select>`;
+  const customRange=state.dashPeriod==="custom"?`<div class="field" style="margin-bottom:0;"><label>Du</label><input type="date" id="cf" value="${esc(state.customFrom)}"></div><div class="field" style="margin-bottom:0;"><label>Au</label><input type="date" id="ct" value="${esc(state.customTo)}"></div>`:"";
+  const kpis=`<div class="stat-row">
+    <div class="stat"><div class="n">${all.length}</div><div class="l">Évacuations</div></div>
+    <div class="stat accent"><div class="n">${okCount}/${all.length}</div><div class="l">Quotas atteints</div></div>
+    <div class="stat"><div class="n">${totDemand.toLocaleString("fr-FR")}</div><div class="l">Demandé MSC</div></div>
+    <div class="stat"><div class="n">${totDone.toLocaleString("fr-FR")}</div><div class="l">Réalisé Medlog</div></div>
+    <div class="stat ${globalRate<80?'alert':''}"><div class="n">${globalRate}%</div><div class="l">Taux de réalisation</div></div>
+  </div>`;
+  const byVessel=(()=>{const m={};all.forEach(e=>{const k=e.vessel||"—";if(!m[k])m[k]={demand:0,done:0};m[k].demand+=Number(e.demand_msc)||0;m[k].done+=Number(e.done_medlog)||0;});
+    return Object.keys(m).map(k=>({label:k,count:m[k].done, sub:`${m[k].done}/${m[k].demand}`})).sort((a,b)=>b.count-a.count);})();
+  const missed=all.filter(e=>!evacQuotaOk(e)).sort((a,b)=>evacRate(a)-evacRate(b)).slice(0,6);
+  const missedCard=`<div class="card"><div class="section-label">Quotas non atteints (${all.filter(e=>!evacQuotaOk(e)).length})</div>
+    ${missed.length?missed.map(e=>`<div data-action="evac-open" data-id="${e.id}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(e.vessel)} · ${esc(e.op_date)}</span>
+        <span style="flex:0 0 auto;font-size:11.5px;color:var(--critical);font-weight:600;">${e.done_medlog}/${e.demand_msc} · ${evacRate(e)}%</span></div>`).join("")
+      :`<div style="font-size:12.5px;color:#15803D;">Tous les quotas de la période sont atteints. ✅</div>`}</div>`;
+  const vesselCard=`<div class="card"><div class="section-label">Réalisé par navire</div>${byVessel.length?`<div class="bars">${byVessel.map(v=>{const max=Math.max(1,...byVessel.map(x=>x.count));return `<div class="bar-row"><div class="b-label" title="${esc(v.label)}">${esc(v.label)}</div><div class="b-track"><div class="b-fill" style="width:${Math.round(v.count/max*100)}%"></div></div><div class="b-count">${esc(v.sub)}</div></div>`;}).join("")}</div>`:`<div class="empty-state" style="padding:22px;">Aucune évacuation.</div>`}</div>`;
+  return `<h1 class="page-title">Dépôt — Évacuations</h1><p class="page-sub">Demande MSC vs réalisation Medlog, par navire.</p>
+    <div class="filters"><div class="field" style="margin-bottom:0;"><label>Période</label>${periodSelect}</div>${customRange}
+      ${canEditMsc()?`<button class="btn secondary" data-action="evac-new" style="align-self:flex-end;">+ Nouvelle évacuation</button>`:""}</div>
+    ${kpis}
+    <div class="two-col">${vesselCard}${missedCard}</div>`;
+}
+function renderEvacList(){
+  const list=(state.mscEvac||[]).slice().sort((a,b)=>(b.op_date||"").localeCompare(a.op_date||""));
+  const rows=list.map(e=>`<tr data-action="evac-open" data-id="${e.id}">
+      <td style="font-weight:600;">${esc(e.vessel)}</td>
+      <td style="font-size:12px;">${esc(e.op_date||"—")}</td>
+      <td style="font-family:var(--mono);text-align:right;">${(e.demand_msc||0).toLocaleString("fr-FR")}</td>
+      <td style="font-family:var(--mono);text-align:right;">${(e.done_medlog||0).toLocaleString("fr-FR")}</td>
+      <td style="font-family:var(--mono);text-align:center;${evacRate(e)<100?'color:var(--critical);':'color:#15803D;'}">${evacRate(e)}%</td>
+      <td>${evacQuotaOk(e)?`<span class="badge closed">Atteint</span>`:`<span class="badge reopened">Non atteint</span>`}</td>
+      <td style="font-size:12px;">${esc(e.end_date||"—")}</td>
+    </tr>`).join("");
+  return `<h1 class="page-title">Évacuations</h1><p class="page-sub">${list.length} évacuation(s).</p>
+    <div class="filters">
+      <button class="btn tiny secondary" data-action="evac-export" style="align-self:flex-end;">Exporter CSV</button>
+      ${canEditMsc()?`<button class="btn secondary" data-action="evac-new">+ Nouvelle évacuation</button>`:""}
+    </div>
+    ${list.length?`<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;background:var(--surface);"><table class="dense">
+      <thead><tr><th>Navire</th><th>Date</th><th>Demande MSC</th><th>Réalisé</th><th>Taux</th><th>Quota</th><th>Date fin</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`:`<div class="empty-state">Aucune évacuation.</div>`}`;
+}
+function renderEvacForm(e){
+  const isNew=!e; e=e||{};
+  const rate = (!isNew) ? `<div class="hint" style="font-size:12px;margin-top:-4px;">Taux de réalisation : <strong style="color:${evacRate(e)<100?'var(--critical)':'#15803D'};">${evacRate(e)}%</strong> · Quota : <strong>${evacQuotaOk(e)?"atteint":"non atteint"}</strong></div>` : "";
+  return `<h1 class="page-title">${isNew?"Nouvelle évacuation":"Évacuation "+(esc(e.vessel)||"")}</h1>
+    <div class="card">
+      <div class="field-row">
+        <div class="field"><label for="ev-vessel">Navire <span style="color:var(--critical);">*</span></label><input type="text" id="ev-vessel" value="${esc(e.vessel||"")}" placeholder="ex : 12345"></div>
+        <div class="field"><label for="ev-date">Date <span style="color:var(--critical);">*</span></label><input type="date" id="ev-date" value="${esc(e.op_date||"")}"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="ev-demand">Demande MSC (conteneurs) <span style="color:var(--critical);">*</span></label><input type="text" id="ev-demand" value="${e.demand_msc!=null?esc(e.demand_msc):""}" placeholder="ex : 380"></div>
+        <div class="field"><label for="ev-done">Réalisation Medlog <span style="color:var(--critical);">*</span></label><input type="text" id="ev-done" value="${e.done_medlog!=null?esc(e.done_medlog):""}" placeholder="ex : 150"></div>
+        <div class="field"><label for="ev-end">Date de fin</label><input type="date" id="ev-end" value="${esc(e.end_date||"")}"></div>
+      </div>
+      ${rate}
+      <div class="field"><label for="ev-comment">Commentaires</label><textarea id="ev-comment" rows="2">${esc(e.comment||"")}</textarea></div>
+      <div id="ev-err"></div>
+      <div class="btn-row">
+        <button class="btn" data-action="evac-save" ${isNew?"":`data-id="${e.id}"`}>${isNew?"Créer":"Enregistrer"}</button>
+        ${(!isNew&&(isAdmin()||can("msc","delete")))?`<button class="btn danger" data-action="evac-del" data-id="${e.id}">Supprimer</button>`:""}
+      </div>
+      <div class="hint" style="font-size:11.5px;margin-top:8px;">Le verdict « quota atteint » est calculé : réalisation ≥ demande.</div>
+    </div>`;
+}
+function exportEvacCSV(){
+  const list=(state.mscEvac||[]).slice().sort((a,b)=>(b.op_date||"").localeCompare(a.op_date||""));
+  const cols=["Navire","Date","Demande MSC","Realisation Medlog","Taux %","Quota","Date fin","Commentaire"];
+  const rows=list.map(e=>[e.vessel||"", e.op_date||"", e.demand_msc||0, e.done_medlog||0, evacRate(e), evacQuotaOk(e)?"Atteint":"Non atteint", e.end_date||"", e.comment||""]);
+  const cell=x=>{ const v=String(x==null?"":x); return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+  const csv=[cols.join(";")].concat(rows.map(r=>r.map(cell).join(";"))).join("\r\n");
+  const blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8;"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download=`MSC_evacuations_${new Date().toISOString().slice(0,10)}.csv`; a.click();
   setTimeout(()=>URL.revokeObjectURL(a.href),1500);
 }
 function exportMscCSV(){
@@ -4326,7 +4431,39 @@ async function onAction(e){
   }
   if(action==="asset-page"){ state.assetPage=Math.max(1,parseInt(el.dataset.p,10)||1); render(); return; }
   if(action==="asset-export"){ exportAssetsCSV(); return; }
-  if(action==="msc-domain"){ state.mscDomain=el.dataset.dom; state.mscNew=false; state.mscSelectedId=null; state.bldNew=false; state.bldSelectedId=null; render(); return; }
+  if(action==="dep-subview"){ state.depSubview=el.dataset.view; state.evacSelectedId=null; state.evacNew=false; render(); return; }
+  if(action==="evac-new"){ state.evacNew=true; state.evacSelectedId=null; render(); return; }
+  if(action==="dep-back"){ state.evacNew=false; state.evacSelectedId=null; render(); return; }
+  if(action==="evac-open"){ state.mscDomain="depot"; state.evacSelectedId=el.dataset.id; state.evacNew=false; render(); return; }
+  if(action==="evac-export"){ exportEvacCSV(); return; }
+  if(action==="evac-save"){
+    const g=x=>document.getElementById(x); const errb=g("ev-err");
+    const vessel=((g("ev-vessel")||{value:""}).value||"").trim();
+    const op_date=(g("ev-date")||{value:""}).value||null;
+    const demand=parseInt(((g("ev-demand")||{value:""}).value||"").trim(),10);
+    const done=parseInt(((g("ev-done")||{value:""}).value||"").trim(),10);
+    if(!vessel){ if(errb) errb.innerHTML=`<div class="error-msg">Le navire est obligatoire.</div>`; return; }
+    if(!op_date){ if(errb) errb.innerHTML=`<div class="error-msg">La date est obligatoire.</div>`; return; }
+    if(isNaN(demand)||demand<0){ if(errb) errb.innerHTML=`<div class="error-msg">Demande MSC invalide.</div>`; return; }
+    if(isNaN(done)||done<0){ if(errb) errb.innerHTML=`<div class="error-msg">Réalisation invalide.</div>`; return; }
+    const payload={ vessel, op_date, demand_msc:demand, done_medlog:done,
+      end_date:(g("ev-end")||{value:""}).value||null, comment:((g("ev-comment")||{value:""}).value||"").trim()||null };
+    busy("Enregistrement…");
+    try{
+      if(el.dataset.id){ const { error } = await sb.from("msc_evacuations").update(payload).eq("id",el.dataset.id); if(error) throw error; }
+      else { payload.created_by=uid(); const { error } = await sb.from("msc_evacuations").insert(payload); if(error) throw error; }
+      state.evacNew=false; state.evacSelectedId=null; await reloadEvac(); render();
+    }catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
+  if(action==="evac-del"){
+    if(!confirm("Supprimer cette évacuation ?")) return;
+    busy("…");
+    try{ await sb.from("msc_evacuations").delete().eq("id",el.dataset.id); state.evacSelectedId=null; await reloadEvac(); render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="msc-domain"){ state.mscDomain=el.dataset.dom; state.mscNew=false; state.mscSelectedId=null; state.bldNew=false; state.bldSelectedId=null; state.evacNew=false; state.evacSelectedId=null; render(); return; }
   if(action==="bld-subview"){ state.bldSubview=el.dataset.view; state.bldSelectedId=null; state.bldNew=false; render(); return; }
   if(action==="bld-new"){ state.bldNew=true; state.bldSelectedId=null; render(); return; }
   if(action==="bld-back"){ state.bldNew=false; state.bldSelectedId=null; render(); return; }
