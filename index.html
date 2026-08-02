@@ -772,6 +772,7 @@ function renderMscReport(all){
     const list=days[d];
     const prop=list.length, pris=list.filter(t=>t.status==="Pris").length;
     const conv=prop?Math.round(pris/prop*100):0;
+    const offDay=list.filter(t=>{ const k=mscDelay(t).key; return k==="late"||k==="overdue"; }).length;
     const load=mscDayLoad(d);
     const use20=`${load.used20}/${load.planned["20"]}`, use40=`${load.used40}/${load.planned["40"]}`;
     const over=load.over20||load.over40;
@@ -780,18 +781,42 @@ function renderMscReport(all){
       <td style="font-family:var(--mono);">${prop}</td>
       <td style="font-family:var(--mono);">${pris}</td>
       <td style="font-family:var(--mono);${conv>=80?'color:#15803D;':conv<50?'color:var(--critical);':''}">${conv}%</td>
+      <td style="font-family:var(--mono);${offDay?'color:var(--critical);font-weight:600;':''}">${offDay}</td>
       <td style="font-family:var(--mono);${load.over20?'color:var(--critical);font-weight:600;':''}">${use20}</td>
       <td style="font-family:var(--mono);${load.over40?'color:var(--critical);font-weight:600;':''}">${use40}</td>
       <td>${over?`<span class="badge reopened">dépassement</span>`:`<span class="badge closed">OK</span>`}</td>
     </tr>`;
   }).join("");
-  return `<div class="card" style="margin-top:16px;">
+  // --- Synthèse « hors délai » + motifs récurrents (lecture top management) ---
+  const isOff=t=>{ const k=mscDelay(t).key; return k==="late"||k==="overdue"; };  // dépassé (livré tard) ou en retard (non livré)
+  const off=all.filter(isOff);
+  const delivered=all.filter(t=>t.delivered_at);
+  const offDelivered=delivered.filter(t=>mscDelay(t).key==="late").length;
+  const offPct = delivered.length ? Math.round(offDelivered/delivered.length*100) : 0;
+  // Motifs récurrents : on compte les motifs des tickets à problème (hors délai OU non réalisés).
+  const problem=all.filter(t=>isOff(t) || t.status!=="Pris");
+  const motifCount={};
+  problem.forEach(t=>{ const r=(t.reason||"").trim(); if(r && r!=="Livré dans les temps") motifCount[r]=(motifCount[r]||0)+1; });
+  const motifRank=Object.keys(motifCount).map(k=>({label:k, count:motifCount[k]})).sort((a,b)=>b.count-a.count);
+  const topMotif=motifRank[0];
+  const synthese=`<div class="card" style="margin-top:16px;">
+    <div class="section-label">Synthèse hors délai — période sélectionnée</div>
+    <div class="stat-row" style="margin-bottom:${motifRank.length?'14px':'0'};">
+      <div class="stat ${off.length?'alert':''}"><div class="n">${off.length}</div><div class="l">Tickets hors délai</div></div>
+      <div class="stat"><div class="n">${offPct}%</div><div class="l">des livraisons hors délai</div></div>
+      <div class="stat ${all.filter(t=>mscDelay(t).key==="overdue").length?'alert':''}"><div class="n">${all.filter(t=>mscDelay(t).key==="overdue").length}</div><div class="l">En retard (non livrés)</div></div>
+      <div class="stat"><div class="n">${topMotif?esc(topMotif.count):"—"}</div><div class="l">${topMotif?"× "+esc(topMotif.label):"Aucun motif"}</div></div>
+    </div>
+    ${motifRank.length?`<div class="section-label" style="font-size:11px;">Motifs récurrents (tickets à problème)</div>${barList(motifRank.slice(0,8))}
+      <div class="hint" style="font-size:11.5px;margin-top:8px;">Motifs des tickets hors délai ou non réalisés. À présenter au top management pour cibler les actions correctives.</div>`:`<div class="hint" style="font-size:12px;">Aucun motif renseigné sur les tickets à problème de la période.</div>`}
+  </div>`;
+  return synthese+`<div class="card" style="margin-top:16px;">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
       <div class="section-label" style="margin:0;">Rapport par jour — période sélectionnée</div>
       <button class="btn tiny secondary" data-action="msc-report-export">Exporter le rapport (CSV)</button>
     </div>
     <div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;background:var(--surface);margin-top:10px;"><table class="dense">
-      <thead><tr><th>Jour</th><th>Proposés</th><th>Pris</th><th>Conversion</th><th>Flotte 20' (util/prévu)</th><th>Flotte 40' (util/prévu)</th><th>Charge</th></tr></thead>
+      <thead><tr><th>Jour</th><th>Proposés</th><th>Pris</th><th>Conversion</th><th>Hors délai</th><th>Flotte 20' (util/prévu)</th><th>Flotte 40' (util/prévu)</th><th>Charge</th></tr></thead>
       <tbody>${rows}</tbody></table></div>
     <div class="hint" style="font-size:11.5px;margin-top:8px;">« Dépassement » = camions distincts utilisés &gt; camions prévus (par type). Alerte souple : signalée, non bloquante.</div>
   </div>`;
@@ -800,13 +825,18 @@ function exportMscReport(){
   const all=state.mscTickets.filter(t=>mscInPeriod(t.ticket_at));
   const days={}; all.forEach(t=>{ const d=mscISODay(t.ticket_at); if(!d) return; (days[d]=days[d]||[]).push(t); });
   const keys=Object.keys(days).sort();
-  const cols=["Jour","Proposes","Pris","Non envoyes","Camion indispo","Taux conversion %","Prevu 20","Utilise 20","Prevu 40","Utilise 40","Depassement"];
+  const offK=t=>{ const k=mscDelay(t).key; return k==="late"||k==="overdue"; };
+  const cols=["Jour","Proposes","Pris","Non envoyes","Camion indispo","Taux conversion %","Hors delai","Prevu 20","Utilise 20","Prevu 40","Utilise 40","Depassement"];
   const rows=keys.map(d=>{ const list=days[d]; const prop=list.length, pris=list.filter(t=>t.status==="Pris").length;
     const ne=list.filter(t=>t.status==="Non envoyé").length, ci=list.filter(t=>t.status==="Camion indisponible").length;
-    const load=mscDayLoad(d);
-    return [d, prop, pris, ne, ci, prop?Math.round(pris/prop*100):0, load.planned["20"], load.used20, load.planned["40"], load.used40, (load.over20||load.over40)?"OUI":"non"]; });
+    const off=list.filter(offK).length; const load=mscDayLoad(d);
+    return [d, prop, pris, ne, ci, prop?Math.round(pris/prop*100):0, off, load.planned["20"], load.used20, load.planned["40"], load.used40, (load.over20||load.over40)?"OUI":"non"]; });
+  // Bloc motifs récurrents (tickets à problème) en fin de fichier
+  const mc={}; all.filter(t=>offK(t)||t.status!=="Pris").forEach(t=>{ const r=(t.reason||"").trim(); if(r&&r!=="Livré dans les temps") mc[r]=(mc[r]||0)+1; });
+  const motifRows=Object.keys(mc).map(k=>[k,mc[k]]).sort((a,b)=>b[1]-a[1]);
   const cell=x=>{ const v=String(x==null?"":x); return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
-  const csv=[cols.join(";")].concat(rows.map(r=>r.map(cell).join(";"))).join("\r\n");
+  let csv=[cols.join(";")].concat(rows.map(r=>r.map(cell).join(";"))).join("\r\n");
+  if(motifRows.length){ csv+="\r\n\r\n"+["Motif recurrent","Occurrences"].join(";")+"\r\n"+motifRows.map(r=>r.map(cell).join(";")).join("\r\n"); }
   const blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8;"});
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
   a.download=`MSC_rapport_${new Date().toISOString().slice(0,10)}.csv`; a.click();
