@@ -661,6 +661,19 @@ function canEditMsc(){ return canWrite("msc"); }
 function mscReasons(){ return lkVals("msc_reason", ["Maintenance du camion","Contrôle douane","Indisponibilité carburant","Demande de livraison le jour suivant","Livré dans les temps"]); }
 function mscTruckLabel(id){ const t=(state.mscTrucks||[]).find(x=>x.id===id); return t?`${t.plate} (${t.container_type}')`:"—"; }
 function mscDayCapacity(dayISO){ return (state.mscCapacity||[]).find(c=>c.day===dayISO)||null; }
+// Charge d'un jour : camions DISTINCTS utilisés vs prévus, par type. (D8)
+function mscDayLoad(dayISO){
+  const cap=mscDayCapacity(dayISO);
+  const planned={ "20": cap?Number(cap.planned_20!=null?cap.planned_20:cap.trucks_20)||0:0,
+                  "40": cap?Number(cap.planned_40!=null?cap.planned_40:cap.trucks_40)||0:0 };
+  const used={ "20":new Set(), "40":new Set() };
+  (state.mscTickets||[]).forEach(t=>{
+    if(mscISODay(t.ticket_at)===dayISO && t.truck_id){ (used[t.container_type]||used["20"]).add(t.truck_id); }
+  });
+  return { planned, used20:used["20"].size, used40:used["40"].size,
+    over20: planned["20"]>0 && used["20"].size>planned["20"],
+    over40: planned["40"]>0 && used["40"].size>planned["40"] };
+}
 function mscISODay(v){ if(!v) return null; const d=new Date(v); const p=n=>String(n).padStart(2,"0"); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
 // Période : réutilise le sélecteur du tableau de bord (state.dashPeriod / periodRange).
@@ -746,7 +759,58 @@ function renderMscDashboard(){
     ${overdueList.length?`<div class="card" style="border-left:4px solid var(--critical);"><div class="section-label">En retard — non livrés, échéance dépassée (${overdueList.length})</div>
       ${overdueList.map(t=>`<div data-action="msc-open" data-id="${t.id}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;">
         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t.ticket_no||"(sans n°)")} · ${esc(t.container_type)}' · ${esc(t.destination||"—")}</span>
-        <span style="flex:0 0 auto;font-size:11.5px;color:var(--critical);font-weight:600;">échéance ${fmtDate(mscDue(t))}</span></div>`).join("")}</div>`:""}`;
+        <span style="flex:0 0 auto;font-size:11.5px;color:var(--critical);font-weight:600;">échéance ${fmtDate(mscDue(t))}</span></div>`).join("")}</div>`:""}
+    ${renderMscReport(all)}`;
+}
+function renderMscReport(all){
+  // Regroupe la période par jour : proposés, pris, taux conversion, charge flotte.
+  const days={};
+  all.forEach(t=>{ const d=mscISODay(t.ticket_at); if(!d) return; (days[d]=days[d]||[]).push(t); });
+  const keys=Object.keys(days).sort((a,b)=>b.localeCompare(a));
+  if(!keys.length) return "";
+  const rows=keys.slice(0,60).map(d=>{
+    const list=days[d];
+    const prop=list.length, pris=list.filter(t=>t.status==="Pris").length;
+    const conv=prop?Math.round(pris/prop*100):0;
+    const load=mscDayLoad(d);
+    const use20=`${load.used20}/${load.planned["20"]}`, use40=`${load.used40}/${load.planned["40"]}`;
+    const over=load.over20||load.over40;
+    return `<tr>
+      <td>${esc(d)}</td>
+      <td style="font-family:var(--mono);">${prop}</td>
+      <td style="font-family:var(--mono);">${pris}</td>
+      <td style="font-family:var(--mono);${conv>=80?'color:#15803D;':conv<50?'color:var(--critical);':''}">${conv}%</td>
+      <td style="font-family:var(--mono);${load.over20?'color:var(--critical);font-weight:600;':''}">${use20}</td>
+      <td style="font-family:var(--mono);${load.over40?'color:var(--critical);font-weight:600;':''}">${use40}</td>
+      <td>${over?`<span class="badge reopened">dépassement</span>`:`<span class="badge closed">OK</span>`}</td>
+    </tr>`;
+  }).join("");
+  return `<div class="card" style="margin-top:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+      <div class="section-label" style="margin:0;">Rapport par jour — période sélectionnée</div>
+      <button class="btn tiny secondary" data-action="msc-report-export">Exporter le rapport (CSV)</button>
+    </div>
+    <div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;background:var(--surface);margin-top:10px;"><table class="dense">
+      <thead><tr><th>Jour</th><th>Proposés</th><th>Pris</th><th>Conversion</th><th>Flotte 20' (util/prévu)</th><th>Flotte 40' (util/prévu)</th><th>Charge</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <div class="hint" style="font-size:11.5px;margin-top:8px;">« Dépassement » = camions distincts utilisés &gt; camions prévus (par type). Alerte souple : signalée, non bloquante.</div>
+  </div>`;
+}
+function exportMscReport(){
+  const all=state.mscTickets.filter(t=>mscInPeriod(t.ticket_at));
+  const days={}; all.forEach(t=>{ const d=mscISODay(t.ticket_at); if(!d) return; (days[d]=days[d]||[]).push(t); });
+  const keys=Object.keys(days).sort();
+  const cols=["Jour","Proposes","Pris","Non envoyes","Camion indispo","Taux conversion %","Prevu 20","Utilise 20","Prevu 40","Utilise 40","Depassement"];
+  const rows=keys.map(d=>{ const list=days[d]; const prop=list.length, pris=list.filter(t=>t.status==="Pris").length;
+    const ne=list.filter(t=>t.status==="Non envoyé").length, ci=list.filter(t=>t.status==="Camion indisponible").length;
+    const load=mscDayLoad(d);
+    return [d, prop, pris, ne, ci, prop?Math.round(pris/prop*100):0, load.planned["20"], load.used20, load.planned["40"], load.used40, (load.over20||load.over40)?"OUI":"non"]; });
+  const cell=x=>{ const v=String(x==null?"":x); return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+  const csv=[cols.join(";")].concat(rows.map(r=>r.map(cell).join(";"))).join("\r\n");
+  const blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8;"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download=`MSC_rapport_${new Date().toISOString().slice(0,10)}.csv`; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1500);
 }
 function renderMscList(){
   const f=state.mscFilter||{};
@@ -4051,6 +4115,7 @@ async function onAction(e){
   if(action==="msc-open"){ state.mscSelectedId=el.dataset.id; state.mscNew=false; render(); return; }
   if(action==="msc-page"){ state.mscPage=Math.max(1,parseInt(el.dataset.p,10)||1); render(); return; }
   if(action==="msc-export"){ exportMscCSV(); return; }
+  if(action==="msc-report-export"){ exportMscReport(); return; }
   if(action==="msc-delay-bar"){ state.mscFilter.delay=el.dataset.val; state.mscSubview="list"; state.mscPage=1; render(); return; }
   if(action==="msc-save"){
     const g=x=>document.getElementById(x); const errb=g("msc-err");
@@ -4074,8 +4139,21 @@ async function onAction(e){
       if(errb) errb.innerHTML=`<div class="error-msg">La disponibilité (camions prévus) du <strong>${esc(dayISO)}</strong> n'est pas encore saisie. Renseignez-la d'abord dans l'onglet « Disponibilité du jour », puis créez le ticket.</div>`;
       return;
     }
+    const cType=(g("msc-type")||{value:"20"}).value;
+    // --- Alerte SOUPLE de charge (D8) : ce camion ajoute-t-il un dépassement ? ---
+    if(!el.dataset.id){
+      const load=mscDayLoad(dayISO);
+      const already=(state.mscTickets||[]).some(t=>mscISODay(t.ticket_at)===dayISO && t.truck_id===truck_id && t.container_type===cType);
+      if(!already){
+        const plannedT = cType==="20"?load.planned["20"]:load.planned["40"];
+        const usedT = cType==="20"?load.used20:load.used40;
+        if(plannedT>0 && usedT>=plannedT){
+          if(!confirm(`Dépassement de charge : ${usedT} camion(s) ${cType}' déjà engagé(s) le ${dayISO} pour ${plannedT} prévu(s). Ce camion en ajoute un de plus. Créer quand même le ticket ?`)) return;
+        }
+      }
+    }
     const payload={ ticket_no, truck_id,
-      container_type:(g("msc-type")||{value:"20"}).value, status:(g("msc-status")||{value:"Pris"}).value,
+      container_type:cType, status:(g("msc-status")||{value:"Pris"}).value,
       ticket_at, validity_hours:validity, destination:((g("msc-dest")||{value:""}).value||"").trim()||null,
       received_at:toISO("msc-received"), delivered_at:toISO("msc-delivered"),
       reason:((g("msc-reason")||{value:""}).value||"").trim()||null, comment:((g("msc-comment")||{value:""}).value||"").trim()||null };
