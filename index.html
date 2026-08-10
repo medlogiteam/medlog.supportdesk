@@ -627,10 +627,11 @@ function renderMain(){
 }
 
 // =========================== MODULE MSC (Lot 1 — Intermodal) ===========================
-const MSC_STATUSES=[["Pris","Pris"],["Non envoyé","Non envoyé"],["Camion indisponible","Camion indisponible"]];
-function mscStatusBadge(s){ const m={"Pris":"closed","Non envoyé":"pending","Camion indisponible":"reopened"}; return `<span class="badge ${m[s]||'pending'}">${esc(s)}</span>`; }
+const MSC_STATUSES=[["Proposé","Proposé"],["Pris","Pris"],["Pris mais non envoyé","Pris mais non envoyé"],["Non pris","Non pris"]];
+function mscStatusBadge(s){ const m={"Proposé":"pending","Pris":"closed","Pris mais non envoyé":"reopened","Non pris":"reopened"}; return `<span class="badge ${m[s]||'pending'}">${esc(s)}</span>`; }
 // Verdict de délai : échéance = ticket_at + validity_hours.
 function mscDelay(t){
+  if(t.status!=="Pris") return { key:"na", label:"—", col:"var(--ink-faint)" };
   if(!t.ticket_at || !t.validity_hours) return { key:"na", label:"—", col:"var(--ink-faint)" };
   const due=new Date(t.ticket_at).getTime() + Number(t.validity_hours)*3600000;
   if(t.delivered_at){
@@ -662,6 +663,7 @@ async function reloadMsc(){
 function canEditMsc(){ return canWrite("msc"); }
 function mscReasons(){ return lkVals("msc_reason", ["Maintenance du camion","Contrôle douane","Indisponibilité carburant","Demande de livraison le jour suivant","Livré dans les temps"]); }
 function mscTruckLabel(id){ const t=(state.mscTrucks||[]).find(x=>x.id===id); return t?`${t.plate} (${t.container_type}')`:"—"; }
+function mscTruckOwnership(id){ const t=(state.mscTrucks||[]).find(x=>x.id===id); return t?(t.ownership||"Self"):null; }
 function mscDayCapacity(dayISO){ return (state.mscCapacity||[]).find(c=>c.day===dayISO)||null; }
 // Charge d'un jour : camions DISTINCTS utilisés vs prévus, par type. (D8)
 function mscDayLoad(dayISO){
@@ -697,16 +699,14 @@ function renderMscArea(){
   if(dom==="depot") return domNav+renderMscDepotArea();
   // --- Domaine Intermodal ---
   const sub=`<div class="subnav">
-    <button data-action="msc-subview" data-view="dashboard" class="${state.mscSubview!=="list"&&state.mscSubview!=="capacity"&&state.mscSubview!=="trucks"?'active':''}">Tableau de bord</button>
+    <button data-action="msc-subview" data-view="dashboard" class="${state.mscSubview!=="list"&&state.mscSubview!=="trucks"?'active':''}">Tableau de bord</button>
     <button data-action="msc-subview" data-view="list" class="${state.mscSubview==="list"?'active':''}">Tickets (${state.mscTickets.length})</button>
-    <button data-action="msc-subview" data-view="capacity" class="${state.mscSubview==="capacity"?'active':''}">Disponibilité du jour</button>
     <button data-action="msc-subview" data-view="trucks" class="${state.mscSubview==="trucks"?'active':''}">Flotte (${state.mscTrucks.length})</button>
   </div>`;
   if(state.mscSelectedId){ const t=state.mscTickets.find(x=>x.id===state.mscSelectedId); if(t) return domNav+`<button class="back-link" data-action="msc-back">&larr; Retour</button>`+renderMscForm(t); state.mscSelectedId=null; }
   if(state.mscNew && canEditMsc()) return domNav+`<button class="back-link" data-action="msc-back">&larr; Retour</button>`+renderMscForm(null);
   if(state.mscSubview==="list") return domNav+sub+renderMscList();
   if(state.mscSubview==="trucks") return domNav+sub+renderMscTrucks();
-  if(state.mscSubview==="capacity") return domNav+sub+renderMscCapacity();
   return domNav+sub+renderMscDashboard();
 }
 function renderMscBldArea(){
@@ -732,29 +732,32 @@ function mscFiltered(){
 }
 function renderMscDashboard(){
   const all=state.mscTickets.filter(t=>mscInPeriod(t.ticket_at));
-  const prop=all.length;                                   // tout ticket proposé
+  const prop=all.length;                                   // tout ticket (proposé au sens large)
   const pris=all.filter(t=>t.status==="Pris").length;
-  const nonEnv=all.filter(t=>t.status==="Non envoyé").length;
-  const camInd=all.filter(t=>t.status==="Camion indisponible").length;
+  const nonEnv=all.filter(t=>t.status==="Pris mais non envoyé").length;
+  const nonPris=all.filter(t=>t.status==="Non pris").length;
   const pct=(n,d)=>d?Math.round(n/d*100):0;
-  // Utilisation flotte : tickets pris / camions dispo sur la période.
-  const cap=state.mscCapacity.filter(c=>mscInPeriod(c.day)).reduce((a,c)=>a+(c.trucks_20||0)+(c.trucks_40||0),0);
+  const billed=all.filter(t=>t.status==="Pris" && t.billed).length;
+  const nSelf=all.filter(t=>mscTruckOwnership(t.truck_id)==="Self").length;
+  const nContract=all.filter(t=>mscTruckOwnership(t.truck_id)==="Contract").length;
   const periods=[["all","Toutes périodes"],["today","Aujourd'hui"],["yesterday","Hier"],["last7","7 derniers jours"],["this_month","Ce mois"],["prev_month","Mois précédent"],["this_year","Cette année"],["custom","Personnalisée"]];
   const periodSelect=`<select id="dash-period">${periods.map(([v,l])=>`<option value="${v}" ${state.dashPeriod===v?'selected':''}>${l}</option>`).join("")}</select>`;
   const customRange=state.dashPeriod==="custom"?`<div class="field" style="margin-bottom:0;"><label>Du</label><input type="date" id="cf" value="${esc(state.customFrom)}"></div><div class="field" style="margin-bottom:0;"><label>Au</label><input type="date" id="ct" value="${esc(state.customTo)}"></div>`:"";
+  const okDel=all.filter(t=>mscDelay(t).key==="ok").length;
+  const offDel=all.filter(t=>{const k=mscDelay(t).key;return k==="late"||k==="overdue";}).length;
   const kpis=`<div class="stat-row">
     <div class="stat"><div class="n">${prop}</div><div class="l">Proposés</div></div>
     <div class="stat accent"><div class="n">${pris}</div><div class="l">Pris</div></div>
-    <div class="stat ${nonEnv?'alert':''}"><div class="n">${nonEnv}</div><div class="l">Non envoyés</div></div>
-    <div class="stat ${camInd?'alert':''}"><div class="n">${camInd}</div><div class="l">Camion indispo.</div></div>
+    <div class="stat ${nonEnv?'alert':''}"><div class="n">${nonEnv}</div><div class="l">Pris non envoyés</div></div>
+    <div class="stat ${nonPris?'alert':''}"><div class="n">${nonPris}</div><div class="l">Non pris</div></div>
     <div class="stat accent"><div class="n">${pct(pris,prop)}%</div><div class="l">Taux conversion</div></div>
-    <div class="stat"><div class="n">${cap?pct(pris,cap):"—"}${cap?"%":""}</div><div class="l">Utilisation flotte</div></div>
+    <div class="stat"><div class="n">${pct(billed,pris)}%</div><div class="l">Taux facturation</div></div>
   </div>`;
   const taux=`<div class="stat-row" style="margin-top:0;">
-    <div class="stat ${camInd?'alert':''}"><div class="n">${pct(camInd,prop)}%</div><div class="l">Taux camion indispo.</div></div>
-    <div class="stat ${nonEnv?'alert':''}"><div class="n">${pct(nonEnv,prop)}%</div><div class="l">Taux non envoyé</div></div>
-    <div class="stat"><div class="n">${all.filter(t=>t.container_type==="20").length}</div><div class="l">Conteneurs 20'</div></div>
-    <div class="stat"><div class="n">${all.filter(t=>t.container_type==="40").length}</div><div class="l">Conteneurs 40'</div></div>
+    <div class="stat"><div class="n">${okDel}</div><div class="l">Réalisés dans les délais</div></div>
+    <div class="stat ${offDel?'alert':''}"><div class="n">${offDel}</div><div class="l">Hors délai</div></div>
+    <div class="stat"><div class="n">${nSelf}</div><div class="l">Self (flotte Medlog)</div></div>
+    <div class="stat"><div class="n">${nContract}</div><div class="l">Contract (sous-traité)</div></div>
   </div>`;
   // Délais sur la période
   const dcount=k=>all.filter(t=>mscDelay(t).key===k).length;
@@ -766,7 +769,7 @@ function renderMscDashboard(){
     {label:"En retard (non livré)", count:dcount("overdue"), val:"overdue"},
     {label:"En cours", count:dcount("running"), val:"running"},
   ].filter(x=>x.count>0);
-  const motifs=(()=>{const m={};all.filter(t=>t.reason&&(mscDelay(t).key==="late"||mscDelay(t).key==="overdue"||t.status!=="Pris")).forEach(t=>{const k=t.reason.trim();m[k]=(m[k]||0)+1;});return Object.keys(m).map(k=>({label:k,count:m[k]})).sort((a,b)=>b.count-a.count).slice(0,6);})();
+  const motifs=(()=>{const m={};all.filter(t=>t.reason&&t.reason.trim()&&t.reason!=="Livré dans les temps").forEach(t=>{const k=t.reason.trim();m[k]=(m[k]||0)+1;});return Object.keys(m).map(k=>({label:k,count:m[k]})).sort((a,b)=>b.count-a.count).slice(0,8);})();
   const overdueList=all.filter(t=>mscDelay(t).key==="overdue").sort((a,b)=>mscDue(a)-mscDue(b)).slice(0,6);
   return `<h1 class="page-title">Opérations MSC — Intermodal</h1><p class="page-sub">Suivi du transport intermodal opéré pour MSC.</p>
     <div class="filters"><div class="field" style="margin-bottom:0;"><label>Période</label>${periodSelect}</div>${customRange}
@@ -794,18 +797,14 @@ function renderMscReport(all){
     const prop=list.length, pris=list.filter(t=>t.status==="Pris").length;
     const conv=prop?Math.round(pris/prop*100):0;
     const offDay=list.filter(t=>{ const k=mscDelay(t).key; return k==="late"||k==="overdue"; }).length;
-    const load=mscDayLoad(d);
-    const use20=`${load.used20}/${load.planned["20"]}`, use40=`${load.used40}/${load.planned["40"]}`;
-    const over=load.over20||load.over40;
+    const billed=list.filter(t=>t.status==="Pris"&&t.billed).length;
     return `<tr>
       <td>${esc(d)}</td>
       <td style="font-family:var(--mono);">${prop}</td>
       <td style="font-family:var(--mono);">${pris}</td>
       <td style="font-family:var(--mono);${conv>=80?'color:#15803D;':conv<50?'color:var(--critical);':''}">${conv}%</td>
       <td style="font-family:var(--mono);${offDay?'color:var(--critical);font-weight:600;':''}">${offDay}</td>
-      <td style="font-family:var(--mono);${load.over20?'color:var(--critical);font-weight:600;':''}">${use20}</td>
-      <td style="font-family:var(--mono);${load.over40?'color:var(--critical);font-weight:600;':''}">${use40}</td>
-      <td>${over?`<span class="badge reopened">dépassement</span>`:`<span class="badge closed">OK</span>`}</td>
+      <td style="font-family:var(--mono);">${pris?Math.round(billed/pris*100):0}%</td>
     </tr>`;
   }).join("");
   // --- Synthèse « hors délai » + motifs récurrents (lecture top management) ---
@@ -837,9 +836,9 @@ function renderMscReport(all){
       <button class="btn tiny secondary" data-action="msc-report-export">Exporter le rapport (CSV)</button>
     </div>
     <div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;background:var(--surface);margin-top:10px;"><table class="dense">
-      <thead><tr><th>Jour</th><th>Proposés</th><th>Pris</th><th>Conversion</th><th>Hors délai</th><th>Flotte 20' (util/prévu)</th><th>Flotte 40' (util/prévu)</th><th>Charge</th></tr></thead>
+      <thead><tr><th>Jour</th><th>Proposés</th><th>Pris</th><th>Conversion</th><th>Hors délai</th><th>Facturation</th></tr></thead>
       <tbody>${rows}</tbody></table></div>
-    <div class="hint" style="font-size:11.5px;margin-top:8px;">« Dépassement » = camions distincts utilisés &gt; camions prévus (par type). Alerte souple : signalée, non bloquante.</div>
+    <div class="hint" style="font-size:11.5px;margin-top:8px;">Conversion = pris / proposés. Facturation = facturés / pris. Hors délai calculé sur les tickets pris.</div>
   </div>`;
 }
 function exportMscReport(){
@@ -847,11 +846,11 @@ function exportMscReport(){
   const days={}; all.forEach(t=>{ const d=mscISODay(t.ticket_at); if(!d) return; (days[d]=days[d]||[]).push(t); });
   const keys=Object.keys(days).sort();
   const offK=t=>{ const k=mscDelay(t).key; return k==="late"||k==="overdue"; };
-  const cols=["Jour","Proposes","Pris","Non envoyes","Camion indispo","Taux conversion %","Hors delai","Prevu 20","Utilise 20","Prevu 40","Utilise 40","Depassement"];
+  const cols=["Jour","Proposes","Pris","Pris non envoyes","Non pris","Taux conversion %","Hors delai","Taux facturation %"];
   const rows=keys.map(d=>{ const list=days[d]; const prop=list.length, pris=list.filter(t=>t.status==="Pris").length;
-    const ne=list.filter(t=>t.status==="Non envoyé").length, ci=list.filter(t=>t.status==="Camion indisponible").length;
-    const off=list.filter(offK).length; const load=mscDayLoad(d);
-    return [d, prop, pris, ne, ci, prop?Math.round(pris/prop*100):0, off, load.planned["20"], load.used20, load.planned["40"], load.used40, (load.over20||load.over40)?"OUI":"non"]; });
+    const ne=list.filter(t=>t.status==="Pris mais non envoyé").length, np=list.filter(t=>t.status==="Non pris").length;
+    const off=list.filter(offK).length; const billed=list.filter(t=>t.status==="Pris"&&t.billed).length;
+    return [d, prop, pris, ne, np, prop?Math.round(pris/prop*100):0, off, pris?Math.round(billed/pris*100):0]; });
   // Bloc motifs récurrents (tickets à problème) en fin de fichier
   const mc={}; all.filter(t=>offK(t)||t.status!=="Pris").forEach(t=>{ const r=(t.reason||"").trim(); if(r&&r!=="Livré dans les temps") mc[r]=(mc[r]||0)+1; });
   const motifRows=Object.keys(mc).map(k=>[k,mc[k]]).sort((a,b)=>b[1]-a[1]);
@@ -908,7 +907,7 @@ function renderMscForm(t){
   const toLocal=v=>{ if(!v) return ""; const d=new Date(v); const p=n=>String(n).padStart(2,"0"); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
   const curType=t.container_type||"20";
   const typeOpts=["20","40"].map(x=>`<option value="${x}" ${curType===x?'selected':''}>${x}'</option>`).join("");
-  const stOpts=MSC_STATUSES.map(([v,l])=>`<option value="${v}" ${(t.status||"Pris")===v?'selected':''}>${l}</option>`).join("");
+  const stOpts=MSC_STATUSES.map(([v,l])=>`<option value="${v}" ${(t.status||"Proposé")===v?'selected':''}>${l}</option>`).join("");
   const trucksSameType=(state.mscTrucks||[]).filter(tr=>tr.is_active && tr.container_type===curType);
   const truckOpts=`<option value="">— choisir un camion —</option>`+(state.mscTrucks||[]).filter(tr=>tr.is_active).map(tr=>`<option value="${tr.id}" ${t.truck_id===tr.id?'selected':''}>${esc(tr.plate)} (${tr.container_type}')</option>`).join("");
   const reasonOpts=`<option value="">— aucun —</option>`+mscReasons().map(r=>`<option value="${esc(r)}" ${t.reason===r?'selected':''}>${esc(r)}</option>`).join("");
@@ -921,7 +920,7 @@ function renderMscForm(t){
         <div class="field"><label for="msc-status">Statut <span style="color:var(--critical);">*</span></label><select id="msc-status">${stOpts}</select></div>
       </div>
       <div class="field-row">
-        <div class="field"><label for="msc-truck">Camion assigné <span style="color:var(--critical);">*</span></label><select id="msc-truck">${truckOpts}</select></div>
+        <div class="field"><label for="msc-truck">Camion assigné <span style="color:var(--critical);">*</span></label><select id="msc-truck">${truckOpts}</select><div id="msc-own-info" style="font-size:11px;color:var(--ink-soft);margin-top:3px;">${t.truck_id?`Nature : <strong>${esc(mscTruckOwnership(t.truck_id)||"—")}</strong>`:""}</div></div>
         <div class="field"><label for="msc-at">Date / heure du ticket <span style="color:var(--critical);">*</span></label><input type="datetime-local" id="msc-at" value="${toLocal(t.ticket_at)}"></div>
         <div class="field"><label for="msc-validity">Délai de validité (h) <span style="color:var(--critical);">*</span></label><input type="text" id="msc-validity" value="${t.validity_hours!=null?esc(t.validity_hours):""}" placeholder="ex : 24"></div>
         <div class="field"><label for="msc-dest">Destination</label><input type="text" id="msc-dest" value="${esc(t.destination||"")}"></div>
@@ -932,6 +931,7 @@ function renderMscForm(t){
         <div class="field"><label for="msc-delivered">Livraison (date / heure)</label><input type="datetime-local" id="msc-delivered" value="${toLocal(t.delivered_at)}"></div>
       </div>
       <div class="field"><label for="msc-reason">Motif / événement</label><select id="msc-reason">${reasonOpts}</select></div>
+      <div class="field" id="msc-billed-row" style="${(t.status||"Proposé")==="Pris"?"":"display:none;"}"><label for="msc-billed">Ops facturé ?</label><select id="msc-billed">${[["false","Non"],["true","Oui"]].map(([v,l])=>`<option value="${v}" ${String(!!t.billed)===v?'selected':''}>${l}</option>`).join("")}</select></div>
       <div class="field"><label for="msc-comment">Commentaires</label><textarea id="msc-comment" rows="2">${esc(t.comment||"")}</textarea></div>
       ${trucksSameType.length?"":`<div class="hint" style="color:var(--critical);font-size:12px;">Aucun camion actif de type ${curType}' dans la flotte. Ajoutez-en un dans l'onglet Flotte, ou changez le type.</div>`}
       <div id="msc-err"></div>
@@ -970,8 +970,9 @@ function renderMscTrucks(){
   const rows=(state.mscTrucks||[]).map(tr=>{
     if(e.id===tr.id){
       return `<tr>
-        <td><input type="text" id="tre-plate" value="${esc(tr.plate)}" style="font-size:12.5px;padding:5px 7px;width:140px;"></td>
+        <td><input type="text" id="tre-plate" value="${esc(tr.plate)}" style="font-size:12.5px;padding:5px 7px;width:130px;"></td>
         <td><select id="tre-type" style="font-size:12.5px;padding:5px 7px;">${["20","40"].map(x=>`<option value="${x}" ${tr.container_type===x?'selected':''}>${x}'</option>`).join("")}</select></td>
+        <td><select id="tre-own" style="font-size:12.5px;padding:5px 7px;">${[["Self","Self"],["Contract","Contract"]].map(([v,l])=>`<option value="${v}" ${(tr.ownership||"Self")===v?'selected':''}>${l}</option>`).join("")}</select></td>
         <td><select id="tre-active" style="font-size:12.5px;padding:5px 7px;">${[["true","Actif"],["false","Inactif"]].map(([v,l])=>`<option value="${v}" ${String(tr.is_active)===v?'selected':''}>${l}</option>`).join("")}</select></td>
         <td><input type="text" id="tre-note" value="${esc(tr.note||"")}" style="font-size:12.5px;padding:5px 7px;"></td>
         <td style="text-align:right;white-space:nowrap;"><button class="btn tiny" data-action="msc-truck-update" data-id="${tr.id}">Enregistrer</button> <button class="btn tiny secondary" data-action="msc-truck-edit-cancel">Annuler</button></td></tr>`;
@@ -979,6 +980,7 @@ function renderMscTrucks(){
     return `<tr>
       <td style="font-family:var(--mono);font-weight:600;">${esc(tr.plate)}</td>
       <td>${tr.container_type}'</td>
+      <td>${(tr.ownership||"Self")==="Self"?`<span class="badge svc">Self</span>`:`<span class="badge accent">Contract</span>`}</td>
       <td>${tr.is_active?`<span class="badge closed">Actif</span>`:`<span class="badge">Inactif</span>`}</td>
       <td style="color:var(--ink-soft);">${esc(tr.note||"")}</td>
       <td style="text-align:right;white-space:nowrap;">${canEditMsc()?`<button class="pj-ico" data-action="msc-truck-edit" data-id="${tr.id}" title="Modifier">✏</button>`:""}${(isAdmin()||can("msc","delete"))?` <button class="pj-ico" data-action="msc-truck-del" data-id="${tr.id}" title="Supprimer" style="color:var(--critical);">✕</button>`:""}</td></tr>`;
@@ -987,6 +989,7 @@ function renderMscTrucks(){
       <div class="field-row">
         <div class="field"><label for="tr-plate">Immatriculation</label><input type="text" id="tr-plate" placeholder="ex : CE-1234-AB"></div>
         <div class="field"><label for="tr-type">Type</label><select id="tr-type">${["20","40"].map(x=>`<option value="${x}">${x}'</option>`).join("")}</select></div>
+        <div class="field"><label for="tr-own">Nature</label><select id="tr-own">${[["Self","Self (flotte Medlog)"],["Contract","Contract (sous-traité)"]].map(([v,l])=>`<option value="${v}">${l}</option>`).join("")}</select></div>
         <div class="field"><label for="tr-note">Note (optionnel)</label><input type="text" id="tr-note"></div>
       </div>
       <div id="tr-err"></div>
@@ -995,7 +998,7 @@ function renderMscTrucks(){
   return `<h1 class="page-title">Flotte MSC</h1><p class="page-sub">Camions de référence — assignés aux tickets, comptés dans le taux d'utilisation.</p>
     ${form}
     ${(state.mscTrucks||[]).length?`<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;background:var(--surface);"><table class="dense">
-      <thead><tr><th>Immatriculation</th><th>Type</th><th>État</th><th>Note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:`<div class="empty-state">Aucun camion. Ajoutez votre flotte pour commencer.</div>`}`;
+      <thead><tr><th>Immatriculation</th><th>Type</th><th>Nature</th><th>État</th><th>Note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:`<div class="empty-state">Aucun camion. Ajoutez votre flotte pour commencer.</div>`}`;
 }
 // =========================== MODULE MSC — BLD Hinterland ===========================
 function bldReloadNeeded(){}
@@ -3856,6 +3859,8 @@ function bindEvents(){
   wire("bld-f-state",e=>{state.bldFilter.state=e.target.value; state.bldPage=1; render();});
   { const el=document.getElementById("bld-f-search"); if(el) el.addEventListener("input",e=>{state.bldFilter.search=e.target.value; state.bldPage=1; render();}); }
   { const el=document.getElementById("bld-dest"); if(el) el.addEventListener("input",e=>{ const row=document.getElementById("bld-rca-row"); if(row) row.style.display = (e.target.value.trim().toUpperCase()==="RCA")?"":"none"; }); }
+  { const el=document.getElementById("msc-status"); if(el) el.addEventListener("change",e=>{ const row=document.getElementById("msc-billed-row"); if(row) row.style.display = (e.target.value==="Pris")?"":"none"; }); }
+  { const el=document.getElementById("msc-truck"); if(el) el.addEventListener("change",e=>{ const info=document.getElementById("msc-own-info"); if(info) info.innerHTML = e.target.value?`Nature : <strong>${esc(mscTruckOwnership(e.target.value)||"—")}</strong>`:""; }); }
   wire("msc-f-status",e=>{state.mscFilter.status=e.target.value; state.mscPage=1; render();});
   wire("msc-f-delay",e=>{state.mscFilter.delay=e.target.value; state.mscPage=1; render();});
   { const el=document.getElementById("msc-f-search"); if(el) el.addEventListener("input",e=>{state.mscFilter.search=e.target.value; state.mscPage=1; render();}); }
@@ -4531,27 +4536,11 @@ async function onAction(e){
     // --- N° unique (D4), contrôle client avant la contrainte base ---
     const dup=(state.mscTickets||[]).some(x=>x.id!==el.dataset.id && (x.ticket_no||"").toLowerCase()===ticket_no.toLowerCase());
     if(dup){ if(errb) errb.innerHTML=`<div class="error-msg">Le n° de ticket « ${esc(ticket_no)} » existe déjà. Chaque ticket doit être unique.</div>`; return; }
-    // --- Disponibilité du jour obligatoire (D5) ---
-    const dayISO=mscISODay(ticket_at);
-    if(!mscDayCapacity(dayISO)){
-      if(errb) errb.innerHTML=`<div class="error-msg">La disponibilité (camions prévus) du <strong>${esc(dayISO)}</strong> n'est pas encore saisie. Renseignez-la d'abord dans l'onglet « Disponibilité du jour », puis créez le ticket.</div>`;
-      return;
-    }
     const cType=(g("msc-type")||{value:"20"}).value;
-    // --- Alerte SOUPLE de charge (D8) : ce camion ajoute-t-il un dépassement ? ---
-    if(!el.dataset.id){
-      const load=mscDayLoad(dayISO);
-      const already=(state.mscTickets||[]).some(t=>mscISODay(t.ticket_at)===dayISO && t.truck_id===truck_id && t.container_type===cType);
-      if(!already){
-        const plannedT = cType==="20"?load.planned["20"]:load.planned["40"];
-        const usedT = cType==="20"?load.used20:load.used40;
-        if(plannedT>0 && usedT>=plannedT){
-          if(!confirm(`Dépassement de charge : ${usedT} camion(s) ${cType}' déjà engagé(s) le ${dayISO} pour ${plannedT} prévu(s). Ce camion en ajoute un de plus. Créer quand même le ticket ?`)) return;
-        }
-      }
-    }
+    const status=(g("msc-status")||{value:"Proposé"}).value;
     const payload={ ticket_no, truck_id,
-      container_type:cType, status:(g("msc-status")||{value:"Pris"}).value,
+      container_type:cType, status,
+      billed: status==="Pris" ? ((g("msc-billed")||{value:"false"}).value==="true") : false,
       ticket_at, validity_hours:validity, destination:((g("msc-dest")||{value:""}).value||"").trim()||null,
       received_at:toISO("msc-received"), delivered_at:toISO("msc-delivered"),
       reason:((g("msc-reason")||{value:""}).value||"").trim()||null, comment:((g("msc-comment")||{value:""}).value||"").trim()||null };
@@ -4578,7 +4567,7 @@ async function onAction(e){
     if(!plate){ if(errb) errb.innerHTML=`<div class="error-msg">L'immatriculation est obligatoire.</div>`; return; }
     if((state.mscTrucks||[]).some(t=>(t.plate||"").toLowerCase()===plate.toLowerCase())){ if(errb) errb.innerHTML=`<div class="error-msg">Ce camion existe déjà.</div>`; return; }
     busy("…");
-    try{ const { error } = await sb.from("msc_trucks").insert({ plate, container_type:(g("tr-type")||{value:"20"}).value, note:((g("tr-note")||{value:""}).value||"").trim()||null, created_by:uid() }); if(error) throw error;
+    try{ const { error } = await sb.from("msc_trucks").insert({ plate, container_type:(g("tr-type")||{value:"20"}).value, ownership:(g("tr-own")||{value:"Self"}).value, note:((g("tr-note")||{value:""}).value||"").trim()||null, created_by:uid() }); if(error) throw error;
       const { data } = await sb.from("msc_trucks").select("*").order("plate"); state.mscTrucks=data||[]; render(); }
     catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
     return;
@@ -4588,7 +4577,7 @@ async function onAction(e){
     const plate=((g("tre-plate")||{value:""}).value||"").trim();
     if(!plate){ alert("Immatriculation obligatoire."); return; }
     busy("…");
-    try{ await sb.from("msc_trucks").update({ plate, container_type:(g("tre-type")||{value:"20"}).value, is_active:(g("tre-active")||{value:"true"}).value==="true", note:((g("tre-note")||{value:""}).value||"").trim()||null }).eq("id",el.dataset.id);
+    try{ await sb.from("msc_trucks").update({ plate, container_type:(g("tre-type")||{value:"20"}).value, ownership:(g("tre-own")||{value:"Self"}).value, is_active:(g("tre-active")||{value:"true"}).value==="true", note:((g("tre-note")||{value:""}).value||"").trim()||null }).eq("id",el.dataset.id);
       state.mscTruckEdit=null; const { data } = await sb.from("msc_trucks").select("*").order("plate"); state.mscTrucks=data||[]; render(); }
     catch(err){ alert(err.message||String(err)); unbusy(); }
     return;
