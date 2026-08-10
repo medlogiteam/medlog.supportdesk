@@ -249,7 +249,7 @@ let state = {
   maintSubview:"annonces", lookupType:"service",
   adminUsers:[], usersLoaded:false,
   assets:[], assetCats:[], assetsLoaded:false, assetsSubview:"dashboard", assetSort:{col:"asset_tag", dir:"asc"}, assetPage:1, assetFilter:{cat:"all", status:"all", search:"", loc:"all", preset:"all"},
-  mscTickets:[], mscCapacity:[], mscTrucks:[], mscBld:[], mscEvac:[], mscLoaded:false, mscDomain:"intermodal", mscSubview:"dashboard", bldSubview:"dashboard", bldSelectedId:null, bldNew:false, bldFilter:{dest:"all", state:"all", search:""}, bldPage:1, depSubview:"dashboard", evacSelectedId:null, evacNew:false, mscFilter:{type:"all", status:"all", delay:"all", search:""}, mscPage:1, mscSelectedId:null, mscNew:false,
+  mscTickets:[], mscCapacity:[], mscTrucks:[], mscBld:[], mscEvac:[], mscStorage:[], mscInventory:[], mscLoaded:false, mscDomain:"intermodal", mscSubview:"dashboard", bldSubview:"dashboard", bldSelectedId:null, bldNew:false, bldFilter:{dest:"all", state:"all", search:""}, bldPage:1, depSubview:"dashboard", evacSelectedId:null, evacNew:false, depTab:"evac", mscFilter:{type:"all", status:"all", delay:"all", search:""}, mscPage:1, mscSelectedId:null, mscNew:false,
   selectedAssetId:null, assetNew:false, assetEditOpen:false, assetMovements:[], profilesList:[],
   stockItems:[], stockLoaded:false, stockSubview:"inventory", stockSearch:"", stockMoves:[], locations:[], locationsLoaded:false,
   selectedStockId:null, stockNew:false,
@@ -646,15 +646,17 @@ function mscDue(t){ return t.ticket_at&&t.validity_hours ? new Date(new Date(t.t
 
 async function loadMsc(){
   try{
-    const [tk, cap, tr, bld, ev] = await Promise.all([
+    const [tk, cap, tr, bld, ev, st, inv] = await Promise.all([
       sb.from("msc_tickets").select("*").order("ticket_at",{ascending:false}),
       sb.from("msc_daily_capacity").select("*").order("day",{ascending:false}),
       sb.from("msc_trucks").select("*").order("plate"),
       sb.from("msc_bld").select("*").order("docs_received_at",{ascending:false}),
-      sb.from("msc_evacuations").select("*").order("op_date",{ascending:false})
+      sb.from("msc_evacuations").select("*").order("op_date",{ascending:false}),
+      sb.from("msc_storage").select("*").order("snapshot_date",{ascending:false}),
+      sb.from("msc_inventory").select("*").order("ref_date",{ascending:false})
     ]);
-    state.mscTickets=tk.data||[]; state.mscCapacity=cap.data||[]; state.mscTrucks=tr.data||[]; state.mscBld=bld.data||[]; state.mscEvac=ev.data||[]; state.mscLoaded=true; render();
-  }catch(e){ state.mscTickets=[]; state.mscCapacity=[]; state.mscTrucks=[]; state.mscBld=[]; state.mscEvac=[]; state.mscLoaded=true; render(); }
+    state.mscTickets=tk.data||[]; state.mscCapacity=cap.data||[]; state.mscTrucks=tr.data||[]; state.mscBld=bld.data||[]; state.mscEvac=ev.data||[]; state.mscStorage=st.data||[]; state.mscInventory=inv.data||[]; state.mscLoaded=true; render();
+  }catch(e){ state.mscTickets=[]; state.mscCapacity=[]; state.mscTrucks=[]; state.mscBld=[]; state.mscEvac=[]; state.mscStorage=[]; state.mscInventory=[]; state.mscLoaded=true; render(); }
 }
 async function reloadMsc(){
   const { data } = await sb.from("msc_tickets").select("*").order("ticket_at",{ascending:false});
@@ -1056,7 +1058,11 @@ function renderBldDashboard(){
     <div class="stat"><div class="n">${avgForm!=null?avgForm+" j":"—"}</div><div class="l">Délai moyen formalités</div></div>
     <div class="stat"><div class="n">${avgLiv!=null?avgLiv+" j":"—"}</div><div class="l">Délai moyen livraison</div></div>
   </div>`;
-  const byDest=(()=>{const m={};all.forEach(b=>{const k=(b.destination||"—");m[k]=(m[k]||0)+1;});return Object.keys(m).map(k=>({label:k,count:m[k]})).sort((a,b)=>b.count-a.count);})();
+  // Événements = états d'avancement, classés par nombre de dossiers (ordre du flux).
+  const stOrder=["open","docs","declared","exited","loading","delivered"];
+  const stLabel={open:"Ouvert",docs:"Documents reçus",declared:"Déclaration validée",exited:"Sorti terminal",loading:"Chargé, en route",delivered:"Livré"};
+  const byEvent=(()=>{const m={};all.forEach(b=>{const k=bldState(b).key;m[k]=(m[k]||0)+1;});
+    return stOrder.filter(k=>m[k]).map(k=>({label:stLabel[k],count:m[k]}));})();
   // Dossiers en attente les plus anciens (non livrés, docs reçus), triés par ancienneté
   const waiting=inProgress.filter(b=>b.docs_received_at).map(b=>({b,age:bldAgeDays(b)})).sort((a,b)=>b.age-a.age).slice(0,8);
   const waitCard=`<div class="card"><div class="section-label">En attente — les plus anciens (${waiting.length})</div>
@@ -1076,7 +1082,7 @@ function renderBldDashboard(){
       ${canEditMsc()?`<button class="btn secondary" data-action="bld-new" style="align-self:flex-end;">+ Nouveau dossier</button>`:""}</div>
     ${kpis}
     <div class="two-col">
-      <div class="card"><div class="section-label">Par destination</div>${byDest.length?barList(byDest):`<div class="empty-state" style="padding:22px;">Aucun dossier.</div>`}</div>
+      <div class="card"><div class="section-label">Dossiers par étape</div>${byEvent.length?barList(byEvent):`<div class="empty-state" style="padding:22px;">Aucun dossier.</div>`}</div>
       ${topCard}
     </div>
     ${waitCard}`;
@@ -1174,12 +1180,14 @@ function evacInPeriod(e){ if(state.dashPeriod==="all") return true; const r=peri
 
 function renderMscDepotArea(){
   const sub=`<div class="subnav">
-    <button data-action="dep-subview" data-view="dashboard" class="${state.depSubview!=="list"?'active':''}">Tableau de bord</button>
+    <button data-action="dep-subview" data-view="dashboard" class="${state.depSubview==="dashboard"?'active':''}">Tableau de bord</button>
     <button data-action="dep-subview" data-view="list" class="${state.depSubview==="list"?'active':''}">Évacuations (${(state.mscEvac||[]).length})</button>
+    <button data-action="dep-subview" data-view="storage" class="${state.depSubview==="storage"?'active':''}">Stockage & inventaires</button>
   </div>`;
   if(state.evacSelectedId){ const e=(state.mscEvac||[]).find(x=>x.id===state.evacSelectedId); if(e) return `<button class="back-link" data-action="dep-back">&larr; Retour</button>`+renderEvacForm(e); state.evacSelectedId=null; }
   if(state.evacNew && canEditMsc()) return `<button class="back-link" data-action="dep-back">&larr; Retour</button>`+renderEvacForm(null);
   if(state.depSubview==="list") return sub+renderEvacList();
+  if(state.depSubview==="storage") return sub+renderMscStorage();
   return sub+renderEvacDashboard();
 }
 function renderEvacDashboard(){
@@ -1262,6 +1270,84 @@ function renderEvacForm(e){
       </div>
       <div class="hint" style="font-size:11.5px;margin-top:8px;">Le verdict « quota atteint » est calculé : réalisation ≥ demande.</div>
     </div>`;
+}
+function storageTotal(r){ return (r.tc_0_15||0)+(r.tc_15_30||0)+(r.tc_30_45||0)+(r.tc_45_60||0)+(r.tc_60_plus||0); }
+function renderMscStorage(){
+  const st=(state.mscStorage||[]).slice().sort((a,b)=>(b.snapshot_date||"").localeCompare(a.snapshot_date||""));
+  const inv=(state.mscInventory||[]).slice().sort((a,b)=>(b.ref_date||"").localeCompare(a.ref_date||""));
+  const last=st[0];
+  // Storage : dernier relevé mis en avant
+  const lastCard=last?`<div class="card"><div class="section-label">Dernier relevé — ${esc(last.snapshot_date)}</div>
+    <div class="stat-row">
+      <div class="stat"><div class="n">${last.tc_0_15}</div><div class="l">0 – 15 j</div></div>
+      <div class="stat"><div class="n">${last.tc_15_30}</div><div class="l">15 – 30 j</div></div>
+      <div class="stat"><div class="n">${last.tc_30_45}</div><div class="l">30 – 45 j</div></div>
+      <div class="stat ${last.tc_45_60?'accent':''}"><div class="n">${last.tc_45_60}</div><div class="l">45 – 60 j</div></div>
+      <div class="stat ${last.tc_60_plus?'alert':''}"><div class="n">${last.tc_60_plus}</div><div class="l">+ 60 j</div></div>
+      <div class="stat"><div class="n">${storageTotal(last)}</div><div class="l">Total TC</div></div>
+    </div></div>`:"";
+  const stForm=canEditMsc()?`<div class="card" style="margin-bottom:16px;"><div class="section-label">Nouveau relevé de stockage</div>
+      <div class="field-row">
+        <div class="field"><label for="st-date">Date du relevé</label><input type="date" id="st-date" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="field"><label for="st-0">0 – 15 j</label><input type="text" id="st-0" placeholder="0"></div>
+        <div class="field"><label for="st-1">15 – 30 j</label><input type="text" id="st-1" placeholder="0"></div>
+        <div class="field"><label for="st-2">30 – 45 j</label><input type="text" id="st-2" placeholder="0"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="st-3">45 – 60 j</label><input type="text" id="st-3" placeholder="0"></div>
+        <div class="field"><label for="st-4">+ 60 j</label><input type="text" id="st-4" placeholder="0"></div>
+        <div class="field"><label for="st-note">Note</label><input type="text" id="st-note"></div>
+      </div>
+      <div id="st-err"></div>
+      <button class="btn" data-action="msc-storage-save">Enregistrer le relevé</button>
+      <div class="hint" style="font-size:11.5px;margin-top:8px;">Un relevé par date (une nouvelle saisie du même jour remplace la précédente).</div>
+    </div>`:"";
+  const stRows=st.map(r=>`<tr>
+      <td>${esc(r.snapshot_date)}</td>
+      <td style="font-family:var(--mono);text-align:center;">${r.tc_0_15}</td>
+      <td style="font-family:var(--mono);text-align:center;">${r.tc_15_30}</td>
+      <td style="font-family:var(--mono);text-align:center;">${r.tc_30_45}</td>
+      <td style="font-family:var(--mono);text-align:center;">${r.tc_45_60}</td>
+      <td style="font-family:var(--mono);text-align:center;${r.tc_60_plus?'color:var(--critical);font-weight:600;':''}">${r.tc_60_plus}</td>
+      <td style="font-family:var(--mono);text-align:center;font-weight:600;">${storageTotal(r)}</td>
+      <td style="color:var(--ink-soft);">${esc(r.note||"")}</td>
+      ${(isAdmin()||can("msc","delete"))?`<td style="text-align:right;"><button class="pj-ico" data-action="msc-storage-del" data-id="${r.id}" title="Supprimer" style="color:var(--critical);">✕</button></td>`:"<td></td>"}
+    </tr>`).join("");
+  const stTable=st.length?`<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;background:var(--surface);"><table class="dense">
+      <thead><tr><th>Date</th><th>0–15 j</th><th>15–30 j</th><th>30–45 j</th><th>45–60 j</th><th>+60 j</th><th>Total</th><th>Note</th><th></th></tr></thead>
+      <tbody>${stRows}</tbody></table></div>`:`<div class="empty-state">Aucun relevé de stockage.</div>`;
+
+  // Inventaires
+  const invForm=canEditMsc()?`<div class="card" style="margin:22px 0 16px;"><div class="section-label">Nouvel inventaire</div>
+      <div class="field-row">
+        <div class="field"><label for="inv-date">Date de référence</label><input type="date" id="inv-date" value="${new Date().toISOString().slice(0,8)+'01'}"></div>
+        <div class="field"><label for="inv-ctrl">TC contrôlés</label><input type="text" id="inv-ctrl" placeholder="0"></div>
+        <div class="field"><label for="inv-ecart">Écarts avec système</label><input type="text" id="inv-ecart" placeholder="0"></div>
+      </div>
+      <div class="field"><label for="inv-note">Note</label><input type="text" id="inv-note"></div>
+      <div id="inv-err"></div>
+      <button class="btn" data-action="msc-inv-save">Enregistrer l'inventaire</button>
+      <div class="hint" style="font-size:11.5px;margin-top:8px;">Date de référence conseillée : le 1er du mois. Un inventaire par date.</div>
+    </div>`:"";
+  const invRows=inv.map(r=>{ const rate=r.tc_controlled?Math.round((1-r.discrepancies/r.tc_controlled)*100):0;
+    return `<tr>
+      <td>${esc(r.ref_date)}</td>
+      <td style="font-family:var(--mono);text-align:center;">${r.tc_controlled}</td>
+      <td style="font-family:var(--mono);text-align:center;${r.discrepancies?'color:var(--critical);font-weight:600;':''}">${r.discrepancies}</td>
+      <td style="font-family:var(--mono);text-align:center;${rate<95?'color:#B45309;':'color:#15803D;'}">${rate}%</td>
+      <td style="color:var(--ink-soft);">${esc(r.note||"")}</td>
+      ${(isAdmin()||can("msc","delete"))?`<td style="text-align:right;"><button class="pj-ico" data-action="msc-inv-del" data-id="${r.id}" title="Supprimer" style="color:var(--critical);">✕</button></td>`:"<td></td>"}
+    </tr>`;}).join("");
+  const invTable=inv.length?`<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;background:var(--surface);"><table class="dense">
+      <thead><tr><th>Date réf.</th><th>TC contrôlés</th><th>Écarts système</th><th>Fiabilité</th><th>Note</th><th></th></tr></thead>
+      <tbody>${invRows}</tbody></table></div>`:`<div class="empty-state">Aucun inventaire.</div>`;
+
+  return `<h1 class="page-title">Stockage & inventaires</h1><p class="page-sub">Relevés périodiques : ancienneté des conteneurs et contrôles d'inventaire.</p>
+    ${lastCard}
+    ${stForm}
+    <div class="section-label">Historique des relevés de stockage</div>${stTable}
+    ${invForm}
+    <div class="section-label">Inventaires effectués</div>${invTable}`;
 }
 function exportEvacCSV(){
   const list=(state.mscEvac||[]).slice().sort((a,b)=>(b.op_date||"").localeCompare(a.op_date||""));
@@ -4443,6 +4529,48 @@ async function onAction(e){
   }
   if(action==="asset-page"){ state.assetPage=Math.max(1,parseInt(el.dataset.p,10)||1); render(); return; }
   if(action==="asset-export"){ exportAssetsCSV(); return; }
+  if(action==="msc-storage-save"){
+    const g=x=>document.getElementById(x); const errb=g("st-err");
+    const day=(g("st-date")||{value:""}).value;
+    if(!day){ if(errb) errb.innerHTML=`<div class="error-msg">La date du relevé est obligatoire.</div>`; return; }
+    const num=id=>{ const v=parseInt(((g(id)||{value:"0"}).value||"0"),10); return isNaN(v)||v<0?0:v; };
+    busy("…");
+    try{ const { error } = await sb.from("msc_storage").upsert({ snapshot_date:day,
+        tc_0_15:num("st-0"), tc_15_30:num("st-1"), tc_30_45:num("st-2"), tc_45_60:num("st-3"), tc_60_plus:num("st-4"),
+        note:((g("st-note")||{value:""}).value||"").trim()||null, created_by:uid() }, { onConflict:"snapshot_date" }); if(error) throw error;
+      const { data } = await sb.from("msc_storage").select("*").order("snapshot_date",{ascending:false}); state.mscStorage=data||[]; render();
+    }catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
+  if(action==="msc-storage-del"){
+    if(!confirm("Supprimer ce relevé ?")) return;
+    busy("…");
+    try{ await sb.from("msc_storage").delete().eq("id",el.dataset.id); const { data } = await sb.from("msc_storage").select("*").order("snapshot_date",{ascending:false}); state.mscStorage=data||[]; render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
+  if(action==="msc-inv-save"){
+    const g=x=>document.getElementById(x); const errb=g("inv-err");
+    const day=(g("inv-date")||{value:""}).value;
+    if(!day){ if(errb) errb.innerHTML=`<div class="error-msg">La date de référence est obligatoire.</div>`; return; }
+    const ctrl=parseInt(((g("inv-ctrl")||{value:"0"}).value||"0"),10);
+    const ec=parseInt(((g("inv-ecart")||{value:"0"}).value||"0"),10);
+    if(isNaN(ctrl)||ctrl<0){ if(errb) errb.innerHTML=`<div class="error-msg">Nombre de TC contrôlés invalide.</div>`; return; }
+    if(isNaN(ec)||ec<0){ if(errb) errb.innerHTML=`<div class="error-msg">Nombre d'écarts invalide.</div>`; return; }
+    busy("…");
+    try{ const { error } = await sb.from("msc_inventory").upsert({ ref_date:day, tc_controlled:ctrl, discrepancies:ec,
+        note:((g("inv-note")||{value:""}).value||"").trim()||null, created_by:uid() }, { onConflict:"ref_date" }); if(error) throw error;
+      const { data } = await sb.from("msc_inventory").select("*").order("ref_date",{ascending:false}); state.mscInventory=data||[]; render();
+    }catch(err){ unbusy(); if(errb) errb.innerHTML=`<div class="error-msg">${esc(err.message||String(err))}</div>`; }
+    return;
+  }
+  if(action==="msc-inv-del"){
+    if(!confirm("Supprimer cet inventaire ?")) return;
+    busy("…");
+    try{ await sb.from("msc_inventory").delete().eq("id",el.dataset.id); const { data } = await sb.from("msc_inventory").select("*").order("ref_date",{ascending:false}); state.mscInventory=data||[]; render(); }
+    catch(err){ alert(err.message||String(err)); unbusy(); }
+    return;
+  }
   if(action==="dep-subview"){ state.depSubview=el.dataset.view; state.evacSelectedId=null; state.evacNew=false; render(); return; }
   if(action==="evac-new"){ state.evacNew=true; state.evacSelectedId=null; render(); return; }
   if(action==="dep-back"){ state.evacNew=false; state.evacSelectedId=null; render(); return; }
